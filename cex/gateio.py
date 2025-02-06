@@ -2,17 +2,36 @@ import requests
 import hmac
 import hashlib
 import time
+import aiohttp
+import base64
+from typing import Dict, List, Optional
 from utils.logger import logger
 from config import GATEIO_API_KEY, GATEIO_API_SECRET
+from .base import BaseCEX
 
-class GateIO:
+class GateIO(BaseCEX):
     SPOT_API_URL = "https://api.gateio.ws/api/v4/spot/tickers"
-    FUTURES_API_URL = "https://fx-api.gateio.ws/api/v4/futures/tickers"
+    FUTURES_API_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
     CURRENCY_API_URL = "https://api.gateio.ws/api/v4/spot/currencies"
+    PRIVATE_API_URL = "https://api.gateio.ws/api/v4"
 
     def __init__(self):
+        super().__init__()
         self.api_key = GATEIO_API_KEY
         self.api_secret = GATEIO_API_SECRET
+        self.session = None
+
+    @property
+    def name(self) -> str:
+        return "Gate.io"
+
+    @property
+    def market_rate_limit_key(self) -> str:
+        return "gateio_market"
+
+    @property
+    def private_rate_limit_key(self) -> str:
+        return "gateio_private"
 
     def _generate_signature(self, method, url, query_string='', body=''):
         t = time.time()
@@ -94,3 +113,83 @@ class GateIO:
         except Exception as e:
             logger.error(f"Exception in GateIO.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+
+    async def get_futures_symbols(self) -> List[str]:
+        """Get all available futures trading pairs"""
+        await self._acquire_market_rate_limit()
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.FUTURES_API_URL}") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    symbols = []
+                    for ticker in data:
+                        pair = ticker.get("currency_pair", "")
+                        if pair.endswith("_USDT"):
+                            symbol = pair.replace("_USDT", "")
+                            symbols.append(symbol)
+                    logger.info(f"Found {len(symbols)} futures trading pairs on Gate.io")
+                    return symbols
+                logger.error("Failed to get Gate.io futures symbols")
+                return []
+        except Exception as e:
+            logger.error(f"Exception in GateIO.get_futures_symbols: {e}")
+            return []
+
+    async def get_24h_volume(self, symbol: str) -> Optional[float]:
+        """Get 24h trading volume for a symbol"""
+        await self._acquire_market_rate_limit()
+        currency_pair = f"{symbol}_USDT"
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.FUTURES_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for ticker in data:
+                        if ticker.get("currency_pair") == currency_pair:
+                            volume = float(ticker.get("volume_24h_usd", 0))
+                            logger.info(f"Gate.io 24h Volume for {symbol}: ${volume:,.2f}")
+                            return volume
+                    logger.error(f"Gate.io: Ticker for {symbol} not found")
+                    return None
+                logger.error(f"Gate.io Volume API error for {symbol}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception in GateIO.get_24h_volume: {e}")
+            return None
+
+    async def close(self):
+        """Close the aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+
+    async def get_spot_symbols(self) -> List[str]:
+        """Get all available spot trading pairs"""
+        await self._acquire_market_rate_limit()
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    symbols = []
+                    for ticker in data:
+                        pair = ticker.get("currency_pair", "")
+                        if pair.endswith("_USDT"):
+                            symbol = pair.replace("_USDT", "")
+                            symbols.append(symbol)
+                    logger.info(f"Found {len(symbols)} spot trading pairs on Gate.io")
+                    return symbols
+                logger.error("Failed to get Gate.io spot symbols")
+                return []
+        except Exception as e:
+            logger.error(f"Exception in GateIO.get_spot_symbols: {e}")
+            return []

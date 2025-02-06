@@ -9,12 +9,12 @@ from cex.manager import CEXManager
 from dex.dexscreener import DexScreener
 
 class LiquidityAnalyzer:
-    def __init__(self):
+    def __init__(self, cex_manager=None):
         self.binance = Binance()
         self.kucoin = KuCoin()
         self.bybit = Bybit()
         self.okx = OKX()
-        self.cex_manager = CEXManager()
+        self.cex_manager = cex_manager or CEXManager()  # Use provided CEXManager or create new one
         self.dexscreener = DexScreener()
         
         # Minimum liquidity thresholds in USD
@@ -27,14 +27,14 @@ class LiquidityAnalyzer:
         
         # Get Binance volume
         try:
-            response = requests.get(
+            session = await self.binance._get_session()
+            async with session.get(
                 f"{self.binance.SPOT_API_URL}/24hr",
-                params={"symbol": f"{symbol}USDT"},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                volumes["binance"] = float(data.get("volume", 0)) * float(data.get("weightedAvgPrice", 0))
+                params={"symbol": f"{symbol}USDT"}
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    volumes["binance"] = float(data.get("volume", 0)) * float(data.get("weightedAvgPrice", 0))
         except Exception as e:
             logger.error(f"Error getting Binance volume: {e}")
             

@@ -5,16 +5,34 @@ import base64
 import time
 from utils.logger import logger
 from config import KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_API_PASSPHRASE
+from .base import BaseCEX
+import aiohttp
+from typing import List, Optional
 
-class KuCoin:
+class KuCoin(BaseCEX):
     SPOT_API_URL = "https://api.kucoin.com/api/v1/market/orderbook/level1"
     FUTURES_API_URL = "https://api-futures.kucoin.com/api/v1/contracts/active"
     CURRENCIES_API_URL = "https://api.kucoin.com/api/v1/currencies"
+    PRIVATE_API_URL = "https://api.kucoin.com"
 
     def __init__(self):
+        super().__init__()
         self.api_key = KUCOIN_API_KEY
         self.api_secret = KUCOIN_API_SECRET
         self.api_passphrase = KUCOIN_API_PASSPHRASE
+        self.session = None
+
+    @property
+    def name(self) -> str:
+        return "KuCoin"
+
+    @property
+    def market_rate_limit_key(self) -> str:
+        return "kucoin_market"
+
+    @property
+    def private_rate_limit_key(self) -> str:
+        return "kucoin_private"
 
     def _generate_signature(self, timestamp, method, endpoint, body=''):
         str_to_sign = f"{timestamp}{method}{endpoint}{body}"
@@ -121,3 +139,90 @@ class KuCoin:
         except Exception as e:
             logger.error(f"Exception in KuCoin.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+
+    async def get_futures_symbols(self) -> List[str]:
+        """Get all available futures trading pairs"""
+        await self._acquire_market_rate_limit()
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.FUTURES_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        symbols = []
+                        for contract in data["data"]:
+                            if contract.get("quoteCoin") == "USDT":
+                                symbol = contract.get("baseCoin")
+                                if symbol:
+                                    symbols.append(symbol)
+                        logger.info(f"Found {len(symbols)} futures trading pairs on KuCoin")
+                        return symbols
+                logger.error("Failed to get KuCoin futures symbols")
+                return []
+        except Exception as e:
+            logger.error(f"Exception in KuCoin.get_futures_symbols: {e}")
+            return []
+
+    async def get_24h_volume(self, symbol: str) -> Optional[float]:
+        """Get 24h trading volume for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}-USDT"
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/api/v1/market/allTickers") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data", {}).get("ticker"):
+                        # Find the ticker for our symbol
+                        ticker = next(
+                            (t for t in data["data"]["ticker"] if t.get("symbol") == formatted_symbol),
+                            None
+                        )
+                        if ticker and "volValue" in ticker:
+                            volume = float(ticker["volValue"])  # Already in USDT
+                            logger.info(f"KuCoin 24h Volume for {symbol}: ${volume:,.2f}")
+                            return volume
+                    logger.error(f"KuCoin Volume API error for {symbol}: Ticker not found")
+                    return None
+                logger.error(f"KuCoin Volume API error for {symbol}: Status {response.status}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception in KuCoin.get_24h_volume: {e}")
+            return None
+
+    async def close(self):
+        """Close the aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+
+    async def get_spot_symbols(self) -> List[str]:
+        """Get all available spot trading pairs"""
+        await self._acquire_market_rate_limit()
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.SPOT_API_URL}/symbols") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        symbols = []
+                        for symbol_data in data["data"]:
+                            if symbol_data.get("quoteCurrency") == "USDT" and symbol_data.get("enableTrading"):
+                                base_symbol = symbol_data.get("baseCurrency")
+                                if base_symbol:
+                                    symbols.append(base_symbol)
+                        logger.info(f"Found {len(symbols)} spot trading pairs on KuCoin")
+                        return symbols
+                logger.error("Failed to get KuCoin spot symbols")
+                return []
+        except Exception as e:
+            logger.error(f"Exception in KuCoin.get_spot_symbols: {e}")
+            return []

@@ -8,7 +8,7 @@ from config import MEXC_API_KEY, MEXC_API_SECRET
 from .base import BaseCEX
 
 class MEXC(BaseCEX):
-    SPOT_API_URL = "https://www.mexc.com/open/api/v2/market/ticker"
+    SPOT_API_URL = "https://api.mexc.com/api/v3/ticker/24hr"
     FUTURES_API_URL = "https://contract.mexc.com/api/v1/contract/ticker"
     PRIVATE_API_URL = "https://api.mexc.com"
     FUTURES_SYMBOLS_URL = "https://contract.mexc.com/api/v1/contract/detail"
@@ -163,25 +163,70 @@ class MEXC(BaseCEX):
             return []
 
     async def get_24h_volume(self, symbol: str) -> Optional[float]:
+        """Get 24h trading volume for a symbol"""
         await self._acquire_market_rate_limit()
-        formatted_symbol = f"{symbol}_USDT"
+        formatted_symbol = f"{symbol}USDT"  # MEXC v3 uses no underscore
         params = {"symbol": formatted_symbol}
-        session = await self._get_session()
         
         try:
-            async with session.get(self.FUTURES_API_URL, params=params) as response:
+            session = await self._get_session()
+            async with session.get(self.SPOT_API_URL, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    if data.get("success") and data.get("data"):
-                        ticker = data["data"][0]
-                        volume = float(ticker.get("volume", 0)) * float(ticker.get("last", 0))
+                    
+                    # Handle both single object and array response formats
+                    ticker_data = data[0] if isinstance(data, list) else data
+                    
+                    if "volume" in ticker_data:
+                        # Get volume in base currency and multiply by last price for USDT volume
+                        base_volume = float(ticker_data["volume"] or 0)
+                        last_price = float(ticker_data.get("lastPrice", 0))
+                        volume = base_volume * last_price
                         logger.info(f"MEXC 24h Volume for {symbol}: ${volume:,.2f}")
                         return volume
-                logger.error(f"MEXC Volume API error for {symbol}")
+                    
+                    logger.error(f"MEXC Volume API error for {symbol}: Invalid response format")
+                    return None
+                logger.error(f"MEXC Volume API error for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in MEXC.get_24h_volume: {e}")
             return None
+
+    async def get_spot_symbols(self) -> List[str]:
+        """Get all available spot trading pairs"""
+        await self._acquire_market_rate_limit()
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    symbols = []
+                    
+                    # Handle response as a dict if available
+                    if isinstance(data, dict) and data.get("success") and data.get("data"):
+                        for ticker in data["data"]:
+                            symbol = ticker.get("symbol", "")
+                            if symbol.endswith("_USDT"):
+                                base_symbol = symbol.replace("_USDT", "")
+                                symbols.append(base_symbol)
+                    # Otherwise assume response is a list of tickers
+                    elif isinstance(data, list):
+                        for ticker in data:
+                            symbol = ticker.get("symbol", "")
+                            if symbol.endswith("USDT"):  # Note: MEXC v3 uses no underscore
+                                base_symbol = symbol.replace("USDT", "")
+                                symbols.append(base_symbol)
+                                
+                    logger.info(f"Found {len(symbols)} spot trading pairs on MEXC")
+                    return symbols
+                    
+                logger.error(f"Failed to get MEXC spot symbols: Status {response.status}")
+                return []
+        except Exception as e:
+            logger.error(f"Exception in MEXC.get_spot_symbols: {e}")
+            return []
 
     async def close(self):
         """Close the aiohttp session"""

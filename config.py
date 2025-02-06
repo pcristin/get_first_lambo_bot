@@ -4,12 +4,24 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+def get_float_env(key: str, default: float) -> float:
+    """Safely get float value from environment variable"""
+    try:
+        value = os.getenv(key)
+        if value is None:
+            return default
+        # Remove any whitespace and convert to float
+        return float(value.strip())
+    except (ValueError, AttributeError) as e:
+        print(f"Warning: Invalid value for {key}, using default {default}. Error: {e}")
+        return default
+
 # Replace these with your actual Telegram bot credentials.
 TELEGRAM_TOKEN = 'YOUR_TELEGRAM_TOKEN'
 TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
 
-# Arbitrage threshold (example: 30% spread)
-ARBITRAGE_THRESHOLD = float(os.getenv('ARBITRAGE_THRESHOLD', '0.02'))
+# Arbitrage threshold (default: 2% spread)
+ARBITRAGE_THRESHOLD = get_float_env('ARBITRAGE_THRESHOLD', 0.02)
 
 # List of tokens to monitor (use token symbols as used by the exchanges)
 WATCHLIST = [
@@ -46,8 +58,8 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # Liquidity Thresholds
-MIN_CEX_24H_VOLUME = float(os.getenv('MIN_CEX_24H_VOLUME', '1000000'))
-MIN_DEX_LIQUIDITY = float(os.getenv('MIN_DEX_LIQUIDITY', '500000'))
+MIN_CEX_24H_VOLUME = get_float_env('MIN_CEX_24H_VOLUME', 1000000)
+MIN_DEX_LIQUIDITY = get_float_env('MIN_DEX_LIQUIDITY', 500000)
 
 # Rate Limiting and Performance Settings
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '10'))  # Number of tokens to process in parallel
