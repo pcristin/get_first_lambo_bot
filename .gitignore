@@ -25,9 +25,8 @@ venv/
 env/
 ENV/
 .env
-.venv
 .venv/
-.venv/*
+.venv/bin
 env.bak/
 venv.bak/
 

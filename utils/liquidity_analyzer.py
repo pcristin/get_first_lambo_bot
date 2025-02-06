@@ -2,7 +2,7 @@ import requests
 from typing import Dict, List, Optional
 from utils.logger import logger
 from cex.binance import Binance
-from cex.kucoin import Kucoin
+from cex.kucoin import KuCoin
 from cex.bybit import Bybit
 from cex.okx import OKX
 from cex.manager import CEXManager
@@ -11,7 +11,7 @@ from dex.dexscreener import DexScreener
 class LiquidityAnalyzer:
     def __init__(self):
         self.binance = Binance()
-        self.kucoin = Kucoin()
+        self.kucoin = KuCoin()
         self.bybit = Bybit()
         self.okx = OKX()
         self.cex_manager = CEXManager()
