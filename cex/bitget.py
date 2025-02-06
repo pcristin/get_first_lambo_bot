@@ -44,57 +44,71 @@ class BitGet(BaseCEX):
         d = mac.digest()
         return base64.b64encode(d).decode()
 
-    def get_spot_price(self, symbol):
-        # Bitget symbol: e.g. "ALPHAOFSOLUSDT"
+    async def get_spot_price(self, symbol: str) -> Optional[float]:
+        """Get spot price for a symbol"""
+        await self._acquire_market_rate_limit()
         formatted_symbol = f"{symbol}USDT"
         params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.SPOT_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("code") == "00000" and data.get("data"):
-                ticker = data["data"][0]
-                price = float(ticker.get("last", 0))
-                logger.info(f"Bitget Spot Price for {symbol}: {price}")
-                return price
-            else:
-                logger.error(f"Bitget Spot API error for {symbol}: {data}")
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        ticker = data["data"][0]
+                        price = float(ticker.get("last", 0))
+                        logger.info(f"Bitget Spot Price for {symbol}: {price}")
+                        return price
+                    else:
+                        logger.error(f"Bitget Spot API error for {symbol}: {data}")
+                        return None
+                logger.error(f"Failed to get Bitget spot price for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in Bitget.get_spot_price: {e}")
             return None
 
-    def get_futures_price(self, symbol):
+    async def get_futures_price(self, symbol: str) -> Optional[float]:
+        """Get futures price for a symbol"""
+        await self._acquire_market_rate_limit()
         # For futures, using USDT perpetual contract.
         # Format: "ALPHAOFSOLUSDT_UMCBL" (the suffix may vary by contract type)
         formatted_symbol = f"{symbol}USDT_UMCBL"
         params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.FUTURES_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("code") == "00000" and data.get("data"):
-                ticker = data["data"]
-                if isinstance(ticker, list):
-                    ticker = ticker[0]
-                if "last" in ticker:
-                    price = float(ticker["last"])
-                    logger.info(f"Bitget Futures Price for {symbol}: {price}")
-                    return price
-                else:
-                    logger.error(f"Bitget Futures API error for {symbol}: No 'last' price in response")
-                    return None
-            else:
-                logger.error(f"Bitget Futures API error for {symbol}: {data}")
+            async with session.get(self.FUTURES_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        ticker = data["data"]
+                        if isinstance(ticker, list):
+                            ticker = ticker[0]
+                        if "last" in ticker:
+                            price = float(ticker["last"])
+                            logger.info(f"Bitget Futures Price for {symbol}: {price}")
+                            return price
+                        else:
+                            logger.error(f"Bitget Futures API error for {symbol}: No 'last' price in response")
+                            return None
+                    else:
+                        logger.error(f"Bitget Futures API error for {symbol}: {data}")
+                        return None
+                logger.error(f"Failed to get Bitget futures price for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in Bitget.get_futures_price: {e}")
             return None
 
-    def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
         Gets deposit and withdrawal information for a token using BitGet's private API.
         Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
         """
         try:
+            await self._acquire_private_rate_limit()
             timestamp = str(int(time.time() * 1000))
             request_path = "/api/spot/v1/public/currencies"
             
@@ -108,39 +122,40 @@ class BitGet(BaseCEX):
                 "Content-Type": "application/json"
             }
             
-            response = requests.get(
+            session = await self._get_session()
+            
+            async with session.get(
                 self.COIN_INFO_API_URL,
-                headers=headers,
-                timeout=10
-            )
-            
-            data = response.json()
-            if data.get("code") == "00000" and data.get("data"):
-                # Find the currency info
-                currency_info = next(
-                    (curr for curr in data["data"] if curr.get("coinName") == symbol),
-                    None
-                )
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        # Find the currency info
+                        currency_info = next(
+                            (curr for curr in data["data"] if curr.get("coinName") == symbol),
+                            None
+                        )
+                        
+                        if currency_info:
+                            # Try to find BSC chain first, fall back to first available chain
+                            chains = currency_info.get("chains", [])
+                            chain_info = next(
+                                (chain for chain in chains if chain.get("chain") == "BSC"),
+                                None
+                            )
+                            if not chain_info and chains:
+                                chain_info = chains[0]
+                            
+                            if chain_info:
+                                return {
+                                    "max_volume": chain_info.get("withdrawMax", "N/A"),
+                                    "deposit": "Enabled" if chain_info.get("depositEnable") else "Disabled",
+                                    "withdraw": "Enabled" if chain_info.get("withdrawEnable") else "Disabled"
+                                }
                 
-                if currency_info:
-                    # Try to find BSC chain first, fall back to first available chain
-                    chains = currency_info.get("chains", [])
-                    chain_info = next(
-                        (chain for chain in chains if chain.get("chain") == "BSC"),
-                        None
-                    )
-                    if not chain_info and chains:
-                        chain_info = chains[0]
-                    
-                    if chain_info:
-                        return {
-                            "max_volume": chain_info.get("withdrawMax", "N/A"),
-                            "deposit": "Enabled" if chain_info.get("depositEnable") else "Disabled",
-                            "withdraw": "Enabled" if chain_info.get("withdrawEnable") else "Disabled"
-                        }
-            
-            logger.error(f"BitGet: Failed to get currency info for {symbol}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                logger.error(f"BitGet: Failed to get currency info for {symbol}")
+                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
             
         except Exception as e:
             logger.error(f"Exception in BitGet.get_deposit_withdraw_info: {e}")

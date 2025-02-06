@@ -42,74 +42,87 @@ class GateIO(BaseCEX):
         sign = hmac.new(self.api_secret.encode('utf-8'), s.encode('utf-8'), hashlib.sha512).hexdigest()
         return {'KEY': self.api_key, 'Timestamp': str(t), 'SIGN': sign}
 
-    def get_spot_price(self, symbol):
-        # Gate.io currency pair: e.g. "ALPHAOFSOL_USDT"
+    async def get_spot_price(self, symbol: str) -> Optional[float]:
+        """Get spot price for a symbol"""
+        await self._acquire_market_rate_limit()
         currency_pair = f"{symbol}_USDT"
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.SPOT_API_URL, timeout=10)
-            data = response.json()
-            for ticker in data:
-                if ticker.get("currency_pair") == currency_pair:
-                    price = float(ticker.get("last", 0))
-                    logger.info(f"Gate.io Spot Price for {symbol}: {price}")
-                    return price
-            logger.error(f"Gate.io Spot: Ticker for {symbol} not found.")
-            return None
+            async with session.get(self.SPOT_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for ticker in data:
+                        if ticker.get("currency_pair") == currency_pair:
+                            price = float(ticker.get("last", 0))
+                            logger.info(f"Gate.io Spot Price for {symbol}: {price}")
+                            return price
+                    logger.error(f"Gate.io Spot: Ticker for {symbol} not found.")
+                    return None
+                logger.error(f"Failed to get Gate.io spot price: Status {response.status}")
+                return None
         except Exception as e:
             logger.error(f"Exception in GateIO.get_spot_price: {e}")
             return None
 
-    def get_futures_price(self, symbol):
-        # Futures ticker for Gate.io: using the same currency pair format.
+    async def get_futures_price(self, symbol: str) -> Optional[float]:
+        """Get futures price for a symbol"""
+        await self._acquire_market_rate_limit()
         currency_pair = f"{symbol}_USDT"
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.FUTURES_API_URL, timeout=10)
-            data = response.json()
-            for ticker in data:
-                if ticker.get("currency_pair") == currency_pair:
-                    price = float(ticker.get("last", 0))
-                    logger.info(f"Gate.io Futures Price for {symbol}: {price}")
-                    return price
-            logger.error(f"Gate.io Futures: Ticker for {symbol} not found.")
-            return None
+            async with session.get(self.FUTURES_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for ticker in data:
+                        if ticker.get("currency_pair") == currency_pair:
+                            price = float(ticker.get("last", 0))
+                            logger.info(f"Gate.io Futures Price for {symbol}: {price}")
+                            return price
+                    logger.error(f"Gate.io Futures: Ticker for {symbol} not found.")
+                    return None
+                logger.error(f"Failed to get Gate.io futures price: Status {response.status}")
+                return None
         except Exception as e:
             logger.error(f"Exception in GateIO.get_futures_price: {e}")
             return None
 
-    def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
         Gets deposit and withdrawal information for a token using Gate.io's private API.
         Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
         """
         try:
+            await self._acquire_private_rate_limit()
             url = f"/api/v4/spot/currencies/{symbol}"
             headers = self._generate_signature("GET", url)
+            session = await self._get_session()
             
-            response = requests.get(
+            async with session.get(
                 f"{self.CURRENCY_API_URL}/{symbol}",
-                headers=headers,
-                timeout=10
-            )
-            
-            data = response.json()
-            if isinstance(data, dict):
-                chains = data.get("chains", [])
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if isinstance(data, dict):
+                        chains = data.get("chains", [])
+                        
+                        # Try to find BSC chain first, fall back to first available chain
+                        chain_info = next((chain for chain in chains if chain.get("chain") == "BSC"), None)
+                        if not chain_info and chains:
+                            chain_info = chains[0]
+                        
+                        if chain_info:
+                            return {
+                                "max_volume": chain_info.get("withdraw_max", "N/A"),
+                                "deposit": "Enabled" if chain_info.get("deposit_status") == "enable" else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("withdraw_status") == "enable" else "Disabled"
+                            }
                 
-                # Try to find BSC chain first, fall back to first available chain
-                chain_info = next((chain for chain in chains if chain.get("chain") == "BSC"), None)
-                if not chain_info and chains:
-                    chain_info = chains[0]
+                logger.error(f"Gate.io: Failed to get currency info for {symbol}")
+                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
                 
-                if chain_info:
-                    return {
-                        "max_volume": chain_info.get("withdraw_max", "N/A"),
-                        "deposit": "Enabled" if chain_info.get("deposit_status") == "enable" else "Disabled",
-                        "withdraw": "Enabled" if chain_info.get("withdraw_status") == "enable" else "Disabled"
-                    }
-            
-            logger.error(f"Gate.io: Failed to get currency info for {symbol}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-            
         except Exception as e:
             logger.error(f"Exception in GateIO.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}

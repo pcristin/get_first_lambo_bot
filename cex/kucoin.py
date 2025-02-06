@@ -7,7 +7,7 @@ from utils.logger import logger
 from config import KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_API_PASSPHRASE
 from .base import BaseCEX
 import aiohttp
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class KuCoin(BaseCEX):
     SPOT_API_URL = "https://api.kucoin.com/api/v1/market/orderbook/level1"
@@ -52,52 +52,65 @@ class KuCoin(BaseCEX):
         ).decode()
         return signature, passphrase
 
-    def get_spot_price(self, symbol):
-        # KuCoin spot symbol format: "ALPHAOFSOL-USDT"
+    async def get_spot_price(self, symbol: str) -> Optional[float]:
+        """Get spot price for a symbol"""
+        await self._acquire_market_rate_limit()
         formatted_symbol = f"{symbol}-USDT"
         params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.SPOT_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("code") == "200000" and data.get("data"):
-                price = float(data["data"].get("price", 0))
-                logger.info(f"KuCoin Spot Price for {symbol}: {price}")
-                return price
-            else:
-                logger.error(f"KuCoin Spot API error for {symbol}: {data}")
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        price = float(data["data"].get("price", 0))
+                        logger.info(f"KuCoin Spot Price for {symbol}: {price}")
+                        return price
+                    else:
+                        logger.error(f"KuCoin Spot API error for {symbol}: {data}")
+                        return None
+                logger.error(f"Failed to get KuCoin spot price for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in KuCoin.get_spot_price: {e}")
             return None
 
-    def get_futures_price(self, symbol):
-        # KuCoin futures symbol format: e.g. "ALPHAOFSOLUSDTM" (no dash)
+    async def get_futures_price(self, symbol: str) -> Optional[float]:
+        """Get futures price for a symbol"""
+        await self._acquire_market_rate_limit()
         formatted_symbol = f"{symbol}USDTM"
         params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.FUTURES_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("code") == "200000" and data.get("data"):
-                contract = next(
-                    (item for item in data["data"] 
-                     if item.get("symbol") == f"XBT{formatted_symbol}"), None
-                )
-                if contract:
-                    price = float(contract.get("markPrice", 0))
-                    logger.info(f"KuCoin Futures Price for {symbol}: {price}")
-                    return price
-            logger.error(f"KuCoin Futures: Contract for {formatted_symbol} not found")
-            return None
+            async with session.get(self.FUTURES_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        contract = next(
+                            (item for item in data["data"] 
+                             if item.get("symbol") == f"XBT{formatted_symbol}"), None
+                        )
+                        if contract:
+                            price = float(contract.get("markPrice", 0))
+                            logger.info(f"KuCoin Futures Price for {symbol}: {price}")
+                            return price
+                    logger.error(f"KuCoin Futures: Contract for {formatted_symbol} not found")
+                    return None
+                logger.error(f"Failed to get KuCoin futures price for {symbol}: Status {response.status}")
+                return None
         except Exception as e:
             logger.error(f"Exception in KuCoin.get_futures_price: {e}")
             return None
 
-    def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
         Gets deposit and withdrawal information for a token using KuCoin's private API.
         Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
         """
         try:
+            await self._acquire_private_rate_limit()
             timestamp = str(int(time.time() * 1000))
             endpoint = f"/api/v1/currencies/{symbol}"
             signature, passphrase = self._generate_signature(timestamp, "GET", endpoint)
@@ -110,32 +123,33 @@ class KuCoin(BaseCEX):
                 "KC-API-KEY-VERSION": "2"
             }
             
-            response = requests.get(
+            session = await self._get_session()
+            
+            async with session.get(
                 f"{self.CURRENCIES_API_URL}/{symbol}",
-                headers=headers,
-                timeout=10
-            )
-            
-            data = response.json()
-            if data.get("code") == "200000" and data.get("data"):
-                currency_data = data["data"]
-                chains = currency_data.get("chains", [])
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        currency_data = data["data"]
+                        chains = currency_data.get("chains", [])
+                        
+                        # Try to find BSC chain first, fall back to first available chain
+                        chain_info = next((chain for chain in chains if chain.get("chainName") == "BSC"), None)
+                        if not chain_info and chains:
+                            chain_info = chains[0]
+                        
+                        if chain_info:
+                            return {
+                                "max_volume": chain_info.get("withdrawalMinSize", "N/A"),
+                                "deposit": "Enabled" if chain_info.get("isDepositEnabled", False) else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("isWithdrawEnabled", False) else "Disabled"
+                            }
                 
-                # Try to find BSC chain first, fall back to first available chain
-                chain_info = next((chain for chain in chains if chain.get("chainName") == "BSC"), None)
-                if not chain_info and chains:
-                    chain_info = chains[0]
+                logger.error(f"KuCoin: Failed to get currency info for {symbol}")
+                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
                 
-                if chain_info:
-                    return {
-                        "max_volume": chain_info.get("withdrawalMinSize", "N/A"),
-                        "deposit": "Enabled" if chain_info.get("isDepositEnabled", False) else "Disabled",
-                        "withdraw": "Enabled" if chain_info.get("isWithdrawEnabled", False) else "Disabled"
-                    }
-            
-            logger.error(f"KuCoin: Failed to get currency info for {symbol}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-            
         except Exception as e:
             logger.error(f"Exception in KuCoin.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}

@@ -43,52 +43,67 @@ class Bybit(BaseCEX):
         ).hexdigest()
         return timestamp, signature
 
-    def get_spot_price(self, symbol):
+    async def get_spot_price(self, symbol: str) -> Optional[float]:
+        """Get spot price for a symbol"""
+        await self._acquire_market_rate_limit()
         formatted_symbol = f"{symbol}USDT"
         params = {
             "category": "spot",
             "symbol": formatted_symbol
         }
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.SPOT_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                price = float(data["result"]["list"][0].get("lastPrice", 0))
-                logger.info(f"Bybit Spot Price for {symbol}: {price}")
-                return price
-            else:
-                logger.error(f"Bybit Spot API error for {symbol}: {data}")
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+                        price = float(data["result"]["list"][0].get("lastPrice", 0))
+                        logger.info(f"Bybit Spot Price for {symbol}: {price}")
+                        return price
+                    else:
+                        logger.error(f"Bybit Spot API error for {symbol}: {data}")
+                        return None
+                logger.error(f"Failed to get Bybit spot price for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in Bybit.get_spot_price: {e}")
             return None
 
-    def get_futures_price(self, symbol):
+    async def get_futures_price(self, symbol: str) -> Optional[float]:
+        """Get futures price for a symbol"""
+        await self._acquire_market_rate_limit()
         formatted_symbol = f"{symbol}USDT"
         params = {
             "category": "linear",
             "symbol": formatted_symbol
         }
+        session = await self._get_session()
+        
         try:
-            response = requests.get(self.FUTURES_API_URL, params=params, timeout=10)
-            data = response.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                price = float(data["result"]["list"][0].get("lastPrice", 0))
-                logger.info(f"Bybit Futures Price for {symbol}: {price}")
-                return price
-            else:
-                logger.error(f"Bybit Futures API error for {symbol}: {data}")
+            async with session.get(self.FUTURES_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+                        price = float(data["result"]["list"][0].get("lastPrice", 0))
+                        logger.info(f"Bybit Futures Price for {symbol}: {price}")
+                        return price
+                    else:
+                        logger.error(f"Bybit Futures API error for {symbol}: {data}")
+                        return None
+                logger.error(f"Failed to get Bybit futures price for {symbol}: Status {response.status}")
                 return None
         except Exception as e:
             logger.error(f"Exception in Bybit.get_futures_price: {e}")
             return None
 
-    def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
         Gets deposit and withdrawal information for a token using Bybit's private API.
         Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
         """
         try:
+            await self._acquire_private_rate_limit()
             params = {
                 "coin": symbol
             }
@@ -102,36 +117,37 @@ class Bybit(BaseCEX):
                 "X-BAPI-RECV-WINDOW": "5000"
             }
             
-            response = requests.get(
+            session = await self._get_session()
+            
+            async with session.get(
                 self.COIN_INFO_API_URL,
                 params=params,
-                headers=headers,
-                timeout=10
-            )
-            
-            data = response.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("rows"):
-                coin_info = data["result"]["rows"][0]
-                chains = coin_info.get("chains", [])
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("retCode") == 0 and data.get("result", {}).get("rows"):
+                        coin_info = data["result"]["rows"][0]
+                        chains = coin_info.get("chains", [])
+                        
+                        # Try to find BSC chain first, fall back to first available chain
+                        chain_info = next(
+                            (chain for chain in chains if chain.get("chain") == "BSC"),
+                            None
+                        )
+                        if not chain_info and chains:
+                            chain_info = chains[0]
+                        
+                        if chain_info:
+                            return {
+                                "max_volume": chain_info.get("withdrawLimit", "N/A"),
+                                "deposit": "Enabled" if chain_info.get("depositStatus") else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("withdrawStatus") else "Disabled"
+                            }
                 
-                # Try to find BSC chain first, fall back to first available chain
-                chain_info = next(
-                    (chain for chain in chains if chain.get("chain") == "BSC"),
-                    None
-                )
-                if not chain_info and chains:
-                    chain_info = chains[0]
+                logger.error(f"Bybit: Failed to get currency info for {symbol}")
+                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
                 
-                if chain_info:
-                    return {
-                        "max_volume": chain_info.get("withdrawLimit", "N/A"),
-                        "deposit": "Enabled" if chain_info.get("depositStatus") else "Disabled",
-                        "withdraw": "Enabled" if chain_info.get("withdrawStatus") else "Disabled"
-                    }
-            
-            logger.error(f"Bybit: Failed to get currency info for {symbol}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-            
         except Exception as e:
             logger.error(f"Exception in Bybit.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}

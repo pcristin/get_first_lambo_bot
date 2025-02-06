@@ -8,7 +8,6 @@ from cex.manager import CEXManager
 from notifier.telegram_notifier import TelegramNotifier
 from utils.logger import logger
 from utils.liquidity_analyzer import LiquidityAnalyzer
-import signal
 
 class ArbitrageEngine:
     def __init__(self):
@@ -24,10 +23,6 @@ class ArbitrageEngine:
         self._CACHE_DURATION = 60  # Cache duration in seconds
         self._running = True  # Flag to control the main loop
         self._shutdown_event = asyncio.Event()  # Event for coordinating shutdown
-        
-        # Set up signal handlers
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, self._handle_signal)
         
         # Verify threshold at startup
         logger.info("🚀 ArbitrageEngine initialized")
@@ -336,9 +331,9 @@ class ArbitrageEngine:
             dw_info = await self.cex_manager.get_deposit_withdraw_info(token_symbol)
             cex_info = dw_info.get(cex_name, {})
 
-            # Build clickable links
-            cex_link = f"https://www.{cex_name.lower()}.com/trade/{token_symbol}_USDT"
-            dex_link = dex_data["dex_url"]
+            # Build clickable links - escape special characters in URLs
+            cex_link = f"https://www\\.{cex_name.lower()}\\.com/trade/{token_symbol}_USDT"
+            dex_link = dex_data["dex_url"].replace(".", "\\.").replace("-", "\\-")
 
             # Get volumes from all exchanges
             volumes = await self.cex_manager.get_24h_volumes(token_symbol)
@@ -350,21 +345,32 @@ class ArbitrageEngine:
             # Calculate potential profit on 1000 USDT trade
             potential_profit = (1000 * spread)
 
-            # Build the Telegram message with emojis and better formatting
+            # Escape special characters in numbers and text
+            spread_str = f"{spread*100:.2f}".replace(".", "\\.")
+            price_diff_str = f"{price_diff_usd:.4f}".replace(".", "\\.")
+            cex_price_str = f"{cex_price:.4f}".replace(".", "\\.")
+            dex_price_str = f"{dex_price:.4f}".replace(".", "\\.")
+            total_volume_str = f"{total_volume:,.2f}".replace(".", "\\.").replace(",", "\\,")
+            dex_liquidity_str = f"{dex_data['liquidity']:,.2f}".replace(".", "\\.").replace(",", "\\,")
+            potential_profit_str = f"{potential_profit:.2f}".replace(".", "\\.")
+            current_time = time.strftime('%Y\\-%m\\-%d %H:%M:%S UTC')
+            network = dex_data.get('network', 'Unknown').replace("-", "\\-")
+            contract = dex_data.get('contract', '').replace("-", "\\-")
+
             message = (
-                f"🚨 *НОВЫЙ АРБИТРАЖ!* 🚨\n\n"
+                f"🚨 *НОВЫЙ DEX\\-CEX АРБИТРАЖ\\!* 🚨\n\n"
                 f"💎 *Токен:* `{token_symbol}`\n"
-                f"📊 *Спред:* `{spread*100:.2f}%` _(${price_diff_usd:.4f})_\n\n"
+                f"📊 *Спред:* `{spread_str}%` _\\(${price_diff_str}\\)_\n\n"
                 
                 f"🔄 *Цены:*\n"
-                f"• DEX ([{dex_data.get('network', 'Unknown')}]({dex_link})): `${dex_price:.4f}`\n"
-                f"• {cex_name} ({market_type}) ([Торговать]({cex_link})): `${cex_price:.4f}`\n\n"
+                f"• DEX \\([{network}]({dex_link})\\): `${dex_price_str}`\n"
+                f"• {cex_name} \\({market_type}\\) \\([Торговать]({cex_link})\\): `${cex_price_str}`\n\n"
                 
                 f"💰 *Ликвидность:*\n"
-                f"• CEX Volume 24h: `${total_volume:,.2f}`\n"
-                f"• DEX Liquidity: `${dex_data['liquidity']:,.2f}`\n\n"
+                f"• CEX Volume 24h: `${total_volume_str}`\n"
+                f"• DEX Liquidity: `${dex_liquidity_str}`\n\n"
                 
-                f"📈 *Потенциальная прибыль (1000 USDT):* `${potential_profit:.2f}`\n\n"
+                f"📈 *Потенциальная прибыль \\(1000 USDT\\):* `${potential_profit_str}`\n\n"
                 
                 f"🏦 *{cex_name} Информация:*\n"
                 f"• Max Volume: `{cex_info.get('max_volume', 'N/A')}`\n"
@@ -372,12 +378,12 @@ class ArbitrageEngine:
                 f"• Withdraw: `{cex_info.get('withdraw', 'N/A')}` {'✅' if cex_info.get('withdraw') == 'Enabled' else '❌'}\n\n"
                 
                 f"📝 *Контракт:*\n"
-                f"`{dex_data.get('contract')}` [(Copy)](tg://copy?text={dex_data.get('contract')})\n\n"
+                f"`{contract}` \\[(Copy)](tg://copy?text={contract})\n\n"
                 
                 f"ℹ️ *Дополнительная информация:*\n"
-                f"• Сеть: `{dex_data.get('network')}`\n"
+                f"• Сеть: `{network}`\n"
                 f"• Тип: `{market_type.upper()}`\n"
-                f"• Время: `{time.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n"
+                f"• Время: `{current_time}`\n"
             )
             await self.notifier.send_message(message)
         except Exception as e:
@@ -394,9 +400,9 @@ class ArbitrageEngine:
             high_cex_info = dw_info.get(high_cex, {})
             low_cex_info = dw_info.get(low_cex, {})
 
-            # Build clickable links
-            high_cex_link = f"https://www.{high_cex.lower()}.com/trade/{token_symbol}_USDT"
-            low_cex_link = f"https://www.{low_cex.lower()}.com/trade/{token_symbol}_USDT"
+            # Build clickable links - escape special characters in URLs
+            high_cex_link = f"https://www\\.{high_cex.lower()}\\.com/trade/{token_symbol}_USDT"
+            low_cex_link = f"https://www\\.{low_cex.lower()}\\.com/trade/{token_symbol}_USDT"
 
             # Get volumes
             volumes = await self.cex_manager.get_24h_volumes(token_symbol)
@@ -408,19 +414,28 @@ class ArbitrageEngine:
             # Calculate potential profit on 1000 USDT trade
             potential_profit = (1000 * spread)
 
+            # Escape special characters in numbers
+            spread_str = f"{spread*100:.2f}".replace(".", "\\.")
+            price_diff_str = f"{price_diff_usd:.4f}".replace(".", "\\.")
+            high_price_str = f"{high_price:.4f}".replace(".", "\\.")
+            low_price_str = f"{low_price:.4f}".replace(".", "\\.")
+            total_volume_str = f"{total_volume:,.2f}".replace(".", "\\.").replace(",", "\\,")
+            potential_profit_str = f"{potential_profit:.2f}".replace(".", "\\.")
+            current_time = time.strftime('%Y\\-%m\\-%d %H:%M:%S UTC')
+
             message = (
-                f"🚨 *НОВЫЙ CEX-CEX АРБИТРАЖ!* 🚨\n\n"
+                f"🚨 *НОВЫЙ CEX\\-CEX АРБИТРАЖ\\!* 🚨\n\n"
                 f"💎 *Токен:* `{token_symbol}`\n"
-                f"📊 *Спред:* `{spread*100:.2f}%` _(${price_diff_usd:.4f})_\n\n"
+                f"📊 *Спред:* `{spread_str}%` _\\(${price_diff_str}\\)_\n\n"
                 
                 f"🔄 *Цены:*\n"
-                f"• {high_cex} ([Торговать]({high_cex_link})): `${high_price:.4f}`\n"
-                f"• {low_cex} ([Торговать]({low_cex_link})): `${low_price:.4f}`\n\n"
+                f"• {high_cex} \\([Торговать]({high_cex_link})\\): `${high_price_str}`\n"
+                f"• {low_cex} \\([Торговать]({low_cex_link})\\): `${low_price_str}`\n\n"
                 
                 f"💰 *Объем торгов:*\n"
-                f"• Total CEX Volume 24h: `${total_volume:,.2f}`\n\n"
+                f"• Total CEX Volume 24h: `${total_volume_str}`\n\n"
                 
-                f"📈 *Потенциальная прибыль (1000 USDT):* `${potential_profit:.2f}`\n\n"
+                f"📈 *Потенциальная прибыль \\(1000 USDT\\):* `${potential_profit_str}`\n\n"
                 
                 f"🏦 *{high_cex} Информация:*\n"
                 f"• Max Volume: `{high_cex_info.get('max_volume', 'N/A')}`\n"
@@ -434,7 +449,7 @@ class ArbitrageEngine:
                 
                 f"ℹ️ *Дополнительная информация:*\n"
                 f"• Тип: `FUTURES`\n"
-                f"• Время: `{time.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n"
+                f"• Время: `{current_time}`\n"
             )
             await self.notifier.send_message(message)
         except Exception as e:
@@ -503,8 +518,8 @@ class ArbitrageEngine:
             liquidity_analysis = await self.liquidity_analyzer.analyze_token_liquidity(token_symbol)
             if not liquidity_analysis["has_sufficient_liquidity"]:
                 logger.debug(f"Skipping {token_symbol} due to insufficient liquidity. " +
-                         f"CEX Volume: ${liquidity_analysis['total_cex_volume']:,.2f}, " +
-                         f"DEX Liquidity: ${liquidity_analysis['total_dex_liquidity']:,.2f}")
+                          f"CEX Volume: ${liquidity_analysis['total_cex_volume']:,.2f}, " +
+                          f"DEX Liquidity: ${liquidity_analysis['total_dex_liquidity']:,.2f}")
                 return None
 
             # Fetch DEX data
@@ -512,25 +527,34 @@ class ArbitrageEngine:
             if not dex_data:
                 return None
 
-            dex_price = dex_data["price"]
-
-            # Get both spot and futures prices from all CEXes
-            cex_prices = await self.cex_manager.get_all_prices(token_symbol)
+            # Get prices from all exchanges
+            prices = await self.cex_manager.get_all_prices(token_symbol)
             
-            # Check if we have any valid prices
-            spot_prices = cex_prices["spot"]
-            futures_prices = cex_prices["futures"]
-            
-            if not any(spot_prices.values()) and not any(futures_prices.values()):
-                return None
+            # Debug log to show all received prices
+            logger.info(f"\nReceived prices for {token_symbol}:")
+            logger.info("Spot prices:")
+            spot_prices = [(cex, price) for cex, price in prices["spot"].items() if price is not None]
+            if spot_prices:
+                for cex, price in spot_prices:
+                    logger.info(f"• {cex}: ${price:.6f}")
+            else:
+                logger.info("• No valid spot prices received")
+                
+            logger.info("Futures prices:")
+            futures_prices = [(cex, price) for cex, price in prices["futures"].items() if price is not None]
+            if futures_prices:
+                for cex, price in futures_prices:
+                    logger.info(f"• {cex}: ${price:.6f}")
+            else:
+                logger.info("• No valid futures prices received")
 
             # Find best arbitrage opportunities for both spot and futures
             best_opportunities = []
 
             # Check spot prices
-            for cex_name, spot_price in spot_prices.items():
+            for cex_name, spot_price in spot_prices:
                 if spot_price is not None:
-                    spread = abs(spot_price - dex_price) / dex_price
+                    spread = abs(spot_price - dex_data["price"]) / dex_data["price"]
                     if spread >= ARBITRAGE_THRESHOLD:
                         best_opportunities.append({
                             "type": "spot",
@@ -540,9 +564,9 @@ class ArbitrageEngine:
                         })
 
             # Check futures prices
-            for cex_name, futures_price in futures_prices.items():
+            for cex_name, futures_price in futures_prices:
                 if futures_price is not None:
-                    spread = abs(futures_price - dex_price) / dex_price
+                    spread = abs(futures_price - dex_data["price"]) / dex_data["price"]
                     if spread >= ARBITRAGE_THRESHOLD:
                         best_opportunities.append({
                             "type": "futures",
@@ -558,7 +582,7 @@ class ArbitrageEngine:
                     opportunity["spread"],
                     opportunity["cex_name"],
                     opportunity["cex_price"],
-                    dex_price,
+                    dex_data["price"],
                     dex_data,
                     liquidity_analysis,
                     market_type=opportunity["type"]
@@ -569,6 +593,52 @@ class ArbitrageEngine:
         except Exception as e:
             logger.error(f"Error checking arbitrage for {token_symbol}: {e}")
             return None
+
+    async def stop(self):
+        """Stop the arbitrage engine gracefully"""
+        if not self._running:
+            return
+            
+        logger.info("Stopping arbitrage engine...")
+        self._running = False
+        self._shutdown_event.set()
+        
+        # Give ongoing operations a chance to complete
+        try:
+            await asyncio.wait_for(self._cleanup(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("Some cleanup operations timed out")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    async def _cleanup(self):
+        """Internal cleanup method"""
+        cleanup_tasks = []
+        
+        # Close all connections with timeout protection
+        if self.cex_manager:
+            cleanup_tasks.append(self.cex_manager.close())
+        if self.dex:
+            cleanup_tasks.append(self.dex.close())
+        if self.jupiter:
+            cleanup_tasks.append(self.jupiter.close())
+        if self.liquidity_analyzer:
+            cleanup_tasks.append(self.liquidity_analyzer.close())
+        if hasattr(self.notifier, 'close'):
+            cleanup_tasks.append(self.notifier.close())
+        
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+
+    async def close(self):
+        """Close all connections and cleanup resources"""
+        try:
+            self._running = False
+            self._shutdown_event.set()
+            await self._cleanup()
+            logger.info("Successfully closed all connections")
+        except Exception as e:
+            logger.error(f"Error during arbitrage engine cleanup: {str(e)}")
 
     async def run(self):
         """Main loop for the arbitrage engine"""
@@ -594,61 +664,89 @@ class ArbitrageEngine:
                     base_exchange, base_tokens = max(exchange_symbols.items(), key=lambda x: len(x[1]))
                     logger.info(f"Using {base_exchange} as base exchange with {len(base_tokens)} tokens")
                     
-                    # Process each token immediately
+                    # Process tokens in parallel batches for speed
+                    batch_size = 50
                     processed = 0
                     opportunities = 0
                     
-                    for token in base_tokens:
+                    for i in range(0, len(base_tokens), batch_size):
                         if not self._running or self._shutdown_event.is_set():
-                            logger.info("Shutdown requested, stopping token processing")
                             break
                             
-                        try:
-                            # Check if token exists on other exchanges
-                            token_prices = await self.cex_manager.get_all_prices(token)
-                            
-                            # Count how many exchanges have this token
-                            available_exchanges = 0
-                            for market_type in ['spot', 'futures']:
-                                for price in token_prices[market_type].values():
-                                    if price is not None:
-                                        available_exchanges += 1
-                            
-                            if available_exchanges >= 2:  # Token exists on at least 2 exchanges
-                                # First check CEX-CEX opportunities
-                                opportunities += await self._process_single_token(
-                                    token, 
-                                    {"price": 0},  # Dummy DEX data since we're checking CEX-CEX first
-                                    {"has_sufficient_liquidity": True},  # We'll check liquidity later if needed
-                                    token_prices
-                                )
+                        batch = base_tokens[i:i + batch_size]
+                        price_tasks = [self.cex_manager.get_all_prices(token) for token in batch]
+                        price_results = await asyncio.gather(*price_tasks, return_exceptions=True)
+                        
+                        for token, prices in zip(batch, price_results):
+                            if isinstance(prices, Exception):
+                                logger.error(f"Error getting prices for {token}: {prices}")
+                                continue
                                 
-                                if not self._running or self._shutdown_event.is_set():
-                                    break
-                                
-                                # Then check DEX opportunities
-                                try:
-                                    dex_data = await self.dex.get_token_data(token)
-                                    if dex_data and dex_data.get("price"):
-                                        # Get liquidity data only if we have valid DEX price
+                            # Check futures prices first (usually more liquid)
+                            futures_prices = [(cex, price) for cex, price in prices["futures"].items() if price is not None]
+                            for i, (cex1, price1) in enumerate(futures_prices):
+                                for cex2, price2 in futures_prices[i+1:]:
+                                    spread = abs(price1 - price2) / min(price1, price2)
+                                    
+                                    if spread >= ARBITRAGE_THRESHOLD:
+                                        logger.info(f"🎯 Found futures arbitrage for {token}:")
+                                        logger.info(f"   {cex1}: ${price1:.6f}")
+                                        logger.info(f"   {cex2}: ${price2:.6f}")
+                                        logger.info(f"   Spread: {spread*100:.2f}%")
+                                        
+                                        # Determine high/low prices
+                                        if price1 > price2:
+                                            high_cex, high_price = cex1, price1
+                                            low_cex, low_price = cex2, price2
+                                        else:
+                                            high_cex, high_price = cex2, price2
+                                            low_cex, low_price = cex1, price1
+                                        
+                                        # Quick liquidity check before notification
                                         liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
-                                        # Process DEX opportunities
-                                        opportunities += await self._process_single_token(
-                                            token,
-                                            dex_data,
-                                            liquidity_data,
-                                            token_prices
-                                        )
-                                except Exception as e:
-                                    logger.debug(f"No DEX data for {token}: {e}")
+                                        if liquidity_data["has_sufficient_liquidity"]:
+                                            await self._send_cex_arbitrage_notification(
+                                                token, spread,
+                                                high_cex, high_price,
+                                                low_cex, low_price,
+                                                liquidity_data
+                                            )
+                                            opportunities += 1
+                            
+                            # Check spot prices
+                            spot_prices = [(cex, price) for cex, price in prices["spot"].items() if price is not None]
+                            for i, (cex1, price1) in enumerate(spot_prices):
+                                for cex2, price2 in spot_prices[i+1:]:
+                                    spread = abs(price1 - price2) / min(price1, price2)
+                                    
+                                    if spread >= ARBITRAGE_THRESHOLD:
+                                        logger.info(f"🎯 Found spot arbitrage for {token}:")
+                                        logger.info(f"   {cex1}: ${price1:.6f}")
+                                        logger.info(f"   {cex2}: ${price2:.6f}")
+                                        logger.info(f"   Spread: {spread*100:.2f}%")
+                                        
+                                        # Determine high/low prices
+                                        if price1 > price2:
+                                            high_cex, high_price = cex1, price1
+                                            low_cex, low_price = cex2, price2
+                                        else:
+                                            high_cex, high_price = cex2, price2
+                                            low_cex, low_price = cex1, price1
+                                        
+                                        # Quick liquidity check before notification
+                                        liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
+                                        if liquidity_data["has_sufficient_liquidity"]:
+                                            await self._send_cex_arbitrage_notification(
+                                                token, spread,
+                                                high_cex, high_price,
+                                                low_cex, low_price,
+                                                liquidity_data
+                                            )
+                                            opportunities += 1
                             
                             processed += 1
                             if processed % 100 == 0:
                                 logger.info(f"Processed {processed}/{len(base_tokens)} tokens, found {opportunities} opportunities")
-                                
-                        except Exception as e:
-                            logger.error(f"Error processing token {token}: {e}")
-                            continue
                     
                     # Calculate and log cycle statistics
                     cycle_time = time.time() - start_time
@@ -667,6 +765,7 @@ class ArbitrageEngine:
                         continue  # Normal timeout, continue to next cycle
                     
                 except asyncio.CancelledError:
+                    logger.info("Main loop cancelled, initiating shutdown...")
                     raise
                 except Exception as e:
                     logger.error(f"❌ Error in main loop: {e}")
@@ -674,71 +773,9 @@ class ArbitrageEngine:
                         await asyncio.sleep(5)  # Wait before retrying
                     
         except asyncio.CancelledError:
-            logger.info("🛑 Arbitrage engine stopping...")
+            logger.info("🛑 Arbitrage engine stopping due to cancellation...")
             raise
         finally:
             logger.info("Cleaning up resources...")
             await self.close()
             logger.info("Arbitrage engine stopped")
-
-    async def stop(self):
-        """Stop the arbitrage engine gracefully"""
-        if not self._running:
-            return
-            
-        logger.info("Stopping arbitrage engine...")
-        self._running = False
-        self._shutdown_event.set()
-        
-        # Give ongoing operations a chance to complete
-        await asyncio.sleep(0.5)
-        
-        # Close all connections
-        await self.close()
-
-    async def close(self):
-        """Close all connections and cleanup resources"""
-        try:
-            self._running = False
-            
-            logger.info("Closing connections...")
-            tasks = []
-            
-            # Close all connections with timeout protection
-            if self.cex_manager:
-                tasks.append(asyncio.create_task(self.cex_manager.close()))
-            if self.dex:
-                tasks.append(asyncio.create_task(self.dex.close()))
-            if self.jupiter:
-                tasks.append(asyncio.create_task(self.jupiter.close()))
-            if self.liquidity_analyzer:
-                tasks.append(asyncio.create_task(self.liquidity_analyzer.close()))
-            if hasattr(self.notifier, 'close'):
-                tasks.append(asyncio.create_task(self.notifier.close()))
-            
-            if tasks:
-                try:
-                    await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
-                except asyncio.TimeoutError:
-                    logger.warning("Some cleanup operations timed out")
-                except Exception as e:
-                    logger.error(f"Error during cleanup: {str(e)}")
-            
-            logger.info("Successfully closed all connections")
-        except Exception as e:
-            logger.error(f"Error during arbitrage engine cleanup: {str(e)}")
-
-    def _handle_signal(self, signum, frame):
-        """Handle system signals"""
-        sig_name = signal.Signals(signum).name
-        logger.info(f"\nReceived signal {sig_name}")
-        logger.info("Initiating graceful shutdown...")
-        self._running = False
-
-    async def __aenter__(self):
-        """Support for async context manager"""
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Ensure resources are cleaned up"""
-        await self.close()
