@@ -15,6 +15,8 @@ An advanced cryptocurrency arbitrage bot that monitors price differences between
   - BitGet
 - **DEX Support:**
   - All DEXes via DexScreener API
+
+> **Note:** The bot will automatically skip exchanges where API credentials are not provided or empty. At least one exchange must be configured for the bot to operate.
   
 ### Smart Liquidity Analysis
 - Real-time monitoring of 24h trading volume on CEXes
@@ -53,7 +55,7 @@ An advanced cryptocurrency arbitrage bot that monitors price differences between
 
 - Python 3.7+
 - Telegram Bot Token (for notifications)
-- API keys for supported exchanges
+- API keys for at least one supported exchange
 
 ## Installation
 
@@ -70,38 +72,56 @@ pip install -r requirements.txt
 
 3. Configure your settings:
    - Copy `.env.example` to `.env`
-   - Add your API keys and settings
+   - Add your API keys for the exchanges you want to use
+   - Leave API keys empty or as empty strings ("") for exchanges you want to skip
    - Adjust thresholds if needed
 
 ## Configuration
 
 ### Environment Variables (.env)
 ```env
-# Exchange API Keys
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_API_SECRET=your_binance_secret_key
-# ... (other exchange keys)
+# Exchange API Keys (leave empty to skip exchange)
+BINANCE_API_KEY=your_binance_api_key    # Optional
+BINANCE_API_SECRET=your_binance_secret  # Optional
 
-# Telegram Configuration
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_CHAT_ID=your_telegram_chat_id
+MEXC_API_KEY=your_mexc_api_key         # Optional
+MEXC_API_SECRET=your_mexc_secret       # Optional
 
-# Arbitrage Settings
+# ... other exchange keys (all optional)
+
+# Required Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token  # Required
+TELEGRAM_CHAT_ID=your_telegram_chat_id      # Required
+
+# Optional Settings (with defaults)
 ARBITRAGE_THRESHOLD=0.02  # 2% spread
-
-# Liquidity Thresholds (in USD)
 MIN_CEX_24H_VOLUME=1000000  # $1M daily volume
 MIN_DEX_LIQUIDITY=500000    # $500K liquidity
-
-# Performance Settings
 BATCH_SIZE=10              # Number of tokens to process in parallel
 UPDATE_INTERVAL=30         # Seconds between full update cycles
 MAX_RETRIES=3             # Maximum retry attempts
 RETRY_DELAY=5             # Seconds between retries
 ```
 
+### Exchange Configuration
+The bot supports multiple exchanges, but not all need to be configured. Here's how it works:
+
+1. **Required Exchanges:**
+   - At least one exchange must be configured with valid API credentials
+   - The bot will raise an error if no exchanges are configured
+
+2. **Optional Exchanges:**
+   - Leave API keys empty or as empty strings ("") to skip an exchange
+   - The bot will automatically detect and skip unconfigured exchanges
+   - You'll see a warning message for each skipped exchange
+
+3. **Dynamic Operation:**
+   - The bot automatically adjusts to use only configured exchanges
+   - Common tokens are found across only active exchanges
+   - Rate limits are applied only to active exchanges
+
 ### Rate Limits
-The bot respects the following rate limits:
+The bot respects the following rate limits for configured exchanges:
 
 #### Exchange-Specific Limits
 - MEXC: 20 req/sec (market), 60 req/min (private)

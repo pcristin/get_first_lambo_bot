@@ -8,19 +8,49 @@ from .bitget import BitGet
 from .gateio import GateIO
 from .kucoin import KuCoin
 from .bybit import Bybit
+from config import (
+    BINANCE_API_KEY, MEXC_API_KEY, KUCOIN_API_KEY, BYBIT_API_KEY,
+    OKX_API_KEY, GATEIO_API_KEY, BITGET_API_KEY,
+    MIN_CEX_24H_VOLUME, MIN_DEX_LIQUIDITY
+)
 
 # Import other CEX implementations as they are added
 
 class CEXManager:
     def __init__(self):
-        self.exchanges: List[BaseCEX] = [
-            MEXC(),
-            OKX(),
-            BitGet(),
-            GateIO(),
-            KuCoin(),
-            Bybit()
+        self.exchanges: List[BaseCEX] = []
+        self.min_volume_threshold = MIN_CEX_24H_VOLUME
+        self.min_liquidity_threshold = MIN_DEX_LIQUIDITY
+        
+        # Initialize only exchanges with valid API credentials
+        self._initialize_exchanges()
+        
+        if not self.exchanges:
+            raise ValueError("No exchanges configured! Please provide API credentials for at least one exchange.")
+        
+        logger.info(f"Initialized {len(self.exchanges)} exchanges: {', '.join(ex.name for ex in self.exchanges)}")
+
+    def _initialize_exchanges(self):
+        """Initialize only exchanges with valid API credentials"""
+        exchange_configs = [
+            (MEXC_API_KEY, MEXC, "MEXC"),
+            (OKX_API_KEY, OKX, "OKX"),
+            (BITGET_API_KEY, BitGet, "BitGet"),
+            (GATEIO_API_KEY, GateIO, "Gate.io"),
+            (KUCOIN_API_KEY, KuCoin, "KuCoin"),
+            (BYBIT_API_KEY, Bybit, "Bybit")
         ]
+
+        for api_key, exchange_class, exchange_name in exchange_configs:
+            if api_key and api_key.strip():  # Check if API key is provided and not empty
+                try:
+                    exchange = exchange_class()
+                    self.exchanges.append(exchange)
+                    logger.info(f"Successfully initialized {exchange_name} exchange")
+                except Exception as e:
+                    logger.error(f"Failed to initialize {exchange_name} exchange: {e}")
+            else:
+                logger.warning(f"Skipping {exchange_name} exchange - no API credentials provided")
 
     async def get_all_futures_symbols(self) -> Dict[str, List[str]]:
         """
@@ -53,7 +83,7 @@ class CEXManager:
         for symbols in symbols_by_exchange.values():
             common_symbols &= set(symbols)
 
-        logger.info(f"Found {len(common_symbols)} symbols common to all exchanges")
+        logger.info(f"Found {len(common_symbols)} symbols common to all {len(self.exchanges)} active exchanges")
         return list(common_symbols)
 
     async def get_futures_prices(self, symbol: str) -> Dict[str, Optional[float]]:
