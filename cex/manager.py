@@ -8,6 +8,7 @@ from .bitget import BitGet
 from .gateio import GateIO
 from .kucoin import KuCoin
 from .bybit import Bybit
+from .binance import Binance
 from config import (
     BINANCE_API_KEY, MEXC_API_KEY, KUCOIN_API_KEY, BYBIT_API_KEY,
     OKX_API_KEY, GATEIO_API_KEY, BITGET_API_KEY,
@@ -38,7 +39,8 @@ class CEXManager:
             (BITGET_API_KEY, BitGet, "BitGet"),
             (GATEIO_API_KEY, GateIO, "Gate.io"),
             (KUCOIN_API_KEY, KuCoin, "KuCoin"),
-            (BYBIT_API_KEY, Bybit, "Bybit")
+            (BYBIT_API_KEY, Bybit, "Bybit"),
+            (BINANCE_API_KEY, Binance, "Binance"),
         ]
 
         for api_key, exchange_class, exchange_name in exchange_configs:
