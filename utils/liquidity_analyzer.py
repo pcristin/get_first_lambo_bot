@@ -5,6 +5,7 @@ from cex.binance import Binance
 from cex.kucoin import Kucoin
 from cex.bybit import Bybit
 from cex.okx import OKX
+from cex.manager import CEXManager
 from dex.dexscreener import DexScreener
 
 class LiquidityAnalyzer:
@@ -13,6 +14,7 @@ class LiquidityAnalyzer:
         self.kucoin = Kucoin()
         self.bybit = Bybit()
         self.okx = OKX()
+        self.cex_manager = CEXManager()
         self.dexscreener = DexScreener()
         
         # Minimum liquidity thresholds in USD
@@ -46,7 +48,7 @@ class LiquidityAnalyzer:
         liquidity = {}
         
         try:
-            token_data = self.dexscreener.get_token_data(symbol)
+            token_data = await self.dexscreener.get_token_data(symbol)
             if token_data:
                 # DexScreener returns data for the most liquid pair
                 liquidity["dexscreener"] = token_data.get("liquidity", 0)
@@ -60,27 +62,26 @@ class LiquidityAnalyzer:
         Analyze token liquidity across exchanges.
         Returns a dict with liquidity metrics and whether it meets thresholds.
         """
-        cex_volumes = await self.get_cex_volume(symbol)
+        # Get CEX volumes and DEX liquidity in parallel
+        total_cex_volume = await self.cex_manager.get_total_cex_volume(symbol)
         dex_liquidity = await self.get_dex_liquidity(symbol)
         
-        total_cex_volume = sum(cex_volumes.values())
         total_dex_liquidity = sum(dex_liquidity.values())
         
         has_sufficient_liquidity = (
-            total_cex_volume >= self.MIN_CEX_24H_VOLUME or
-            total_dex_liquidity >= self.MIN_DEX_LIQUIDITY
+            total_cex_volume >= self.cex_manager.min_volume_threshold or
+            total_dex_liquidity >= self.cex_manager.min_liquidity_threshold
         )
         
         return {
             "symbol": symbol,
-            "cex_volumes": cex_volumes,
             "total_cex_volume": total_cex_volume,
             "dex_liquidity": dex_liquidity,
             "total_dex_liquidity": total_dex_liquidity,
             "has_sufficient_liquidity": has_sufficient_liquidity,
             "metrics": {
-                "cex_volume_threshold": self.MIN_CEX_24H_VOLUME,
-                "dex_liquidity_threshold": self.MIN_DEX_LIQUIDITY
+                "cex_volume_threshold": self.cex_manager.min_volume_threshold,
+                "dex_liquidity_threshold": self.cex_manager.min_liquidity_threshold
             }
         }
     
@@ -95,4 +96,9 @@ class LiquidityAnalyzer:
             if analysis["has_sufficient_liquidity"]:
                 high_liquidity_tokens.append(analysis)
                 
-        return high_liquidity_tokens 
+        return high_liquidity_tokens
+
+    async def close(self):
+        """Close all connections"""
+        await self.cex_manager.close()
+        await self.dexscreener.close() 

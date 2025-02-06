@@ -1,32 +1,53 @@
 # Crypto Arbitrage Bot
 
-An advanced cryptocurrency arbitrage bot that monitors price differences between DEX and CEX platforms, with built-in liquidity analysis to ensure executable trades.
+An advanced cryptocurrency arbitrage bot that monitors price differences between DEX and CEX platforms, with built-in liquidity analysis and comprehensive rate limiting to ensure executable trades.
 
 ## Features
 
-- **Multi-Exchange Support**
-  - CEX Support: Binance, KuCoin, Bybit, OKX, MEXC
-  - DEX Support: via DexScreener API
+### Multi-Exchange Support
+- **CEX Support:**
+  - Binance
+  - KuCoin
+  - Bybit
+  - OKX
+  - MEXC
+  - Gate.io
+  - BitGet
+- **DEX Support:**
+  - All DEXes via DexScreener API
   
-- **Smart Liquidity Analysis**
-  - Monitors 24h trading volume on CEXes
-  - Tracks DEX liquidity pools
-  - Configurable minimum liquidity thresholds
-  - Automatic filtering of low-liquidity pairs
+### Smart Liquidity Analysis
+- Real-time monitoring of 24h trading volume on CEXes
+- DEX liquidity pool tracking
+- Configurable minimum liquidity thresholds
+- Automatic filtering of low-liquidity pairs
+- Multi-exchange volume aggregation
 
-- **Real-time Arbitrage Detection**
-  - Continuous monitoring of price differences
-  - Configurable arbitrage spread threshold
-  - Detailed spread calculations
+### Advanced Rate Limiting
+- Exchange-specific rate limits:
+  - Per-endpoint limits (market/private)
+  - IP-based rate limits
+  - Request weight handling
+- Automatic request throttling
+- Smart batch processing
+- Fallback limits for safety
 
-- **Comprehensive Notifications**
-  - Telegram notifications for arbitrage opportunities
-  - Includes:
-    - Price spread details
-    - Liquidity information
-    - Token contract addresses
-    - Exchange links
-    - Deposit/withdrawal status
+### Real-time Arbitrage Detection
+- Continuous monitoring of price differences
+- Configurable arbitrage spread threshold
+- Detailed spread calculations
+- Best opportunity selection across all exchanges
+- Parallel processing of tokens
+
+### Comprehensive Notifications
+- Telegram notifications for arbitrage opportunities
+- Includes:
+  - Price spread details
+  - Liquidity information across all exchanges
+  - Token contract addresses
+  - Exchange-specific links
+  - Deposit/withdrawal status
+  - Network information
 
 ## Prerequisites
 
@@ -48,38 +69,58 @@ pip install -r requirements.txt
 ```
 
 3. Configure your settings:
-   - Copy `config.example.py` to `config.py`
+   - Copy `.env.example` to `.env`
    - Add your API keys and settings
-   - Adjust liquidity thresholds if needed
+   - Adjust thresholds if needed
 
 ## Configuration
 
-### Liquidity Thresholds
-Default thresholds in `utils/liquidity_analyzer.py`:
-- Minimum CEX 24h Volume: $1,000,000
-- Minimum DEX Liquidity: $500,000
+### Environment Variables (.env)
+```env
+# Exchange API Keys
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_API_SECRET=your_binance_secret_key
+# ... (other exchange keys)
 
-You can adjust these values based on your trading requirements.
+# Telegram Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
 
-### Exchange API Keys
-Add your exchange API keys in `config.py`:
-```python
-BINANCE_API_KEY = "your-api-key"
-BINANCE_API_SECRET = "your-api-secret"
-# Add other exchange keys as needed
+# Arbitrage Settings
+ARBITRAGE_THRESHOLD=0.02  # 2% spread
+
+# Liquidity Thresholds (in USD)
+MIN_CEX_24H_VOLUME=1000000  # $1M daily volume
+MIN_DEX_LIQUIDITY=500000    # $500K liquidity
+
+# Performance Settings
+BATCH_SIZE=10              # Number of tokens to process in parallel
+UPDATE_INTERVAL=30         # Seconds between full update cycles
+MAX_RETRIES=3             # Maximum retry attempts
+RETRY_DELAY=5             # Seconds between retries
 ```
 
-### Token Watchlist
-Configure your token watchlist in `config.py`:
-```python
-WATCHLIST = ["BTC", "ETH", "SOL", ...]
-```
+### Rate Limits
+The bot respects the following rate limits:
 
-### Arbitrage Settings
-Set your desired arbitrage threshold in `config.py`:
-```python
-ARBITRAGE_THRESHOLD = 0.02  # 2% spread
-```
+#### Exchange-Specific Limits
+- MEXC: 20 req/sec (market), 60 req/min (private)
+- Bybit: 50 req/sec (market), 600 req/min (private)
+- OKX: 20 req/2sec (market), 300 req/min (private)
+- KuCoin: 30 req/sec (market), 180 req/min (private)
+- Gate.io: 300 req/min (market), 180 req/min (private)
+- BitGet: 20 req/sec (market), 300 req/min (private)
+- Binance: 1200 req/min (market), 60 req/min (private)
+- DexScreener: 30 req/min
+
+#### IP-Based Limits
+- Binance: 2400 req/min
+- OKX: 500 req/min
+- Bybit: 1200 req/min
+- KuCoin: 1800 req/min
+- Gate.io: 900 req/min
+- MEXC: 1800 req/min
+- DexScreener: 60 req/min
 
 ## Usage
 
@@ -89,22 +130,27 @@ python main.py
 ```
 
 The bot will:
-1. Start monitoring configured tokens
-2. Check liquidity levels across exchanges
-3. Calculate price differences
-4. Send notifications when profitable opportunities are found
+1. Start monitoring all available tokens across exchanges
+2. Apply rate limiting and batch processing
+3. Check liquidity levels
+4. Calculate price differences
+5. Send notifications for profitable opportunities
 
-## Notifications
+### Token Discovery Process
+1. Fetches all available futures trading pairs from each CEX
+2. Finds tokens common to all exchanges
+3. Verifies DEX availability
+4. Filters by liquidity thresholds
+5. Monitors in configurable batch sizes
 
-Telegram notifications include:
-- Token symbol
-- Price spread percentage
-- DEX and CEX prices
-- Liquidity information
-- Maximum trading volume
-- Deposit/withdrawal status
-- Contract address and network
-- Direct links to exchanges
+## Performance Optimization
+
+The bot includes several optimizations:
+- Async/await for efficient API calls
+- Parallel processing of token batches
+- Smart rate limiting with request queuing
+- Session reuse for better performance
+- Automatic cleanup of expired rate limit records
 
 ## Contributing
 
@@ -116,4 +162,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Disclaimer
 
-This bot is for informational purposes only. Use at your own risk. Always verify opportunities and conduct your own research before trading. 
+This bot is for informational purposes only. Use at your own risk. Always verify opportunities and conduct your own research before trading. The bot implements rate limiting according to exchange specifications, but it's your responsibility to ensure compliance with exchange terms of service. 

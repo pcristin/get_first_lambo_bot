@@ -89,3 +89,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+
+# Cursor 
+.cursorrules
+.cursorignore
+.cursorignorerules
