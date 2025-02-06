@@ -126,33 +126,96 @@ class KuCoin(BaseCEX):
             session = await self._get_session()
             
             async with session.get(
-                f"{self.CURRENCIES_API_URL}/{symbol}",
+                f"{self.PRIVATE_API_URL}{endpoint}",
                 headers=headers
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("code") == "200000" and data.get("data"):
-                        currency_data = data["data"]
-                        chains = currency_data.get("chains", [])
+                        currency = data["data"]
+                        chains = currency.get("chains", [])
                         
                         # Try to find BSC chain first, fall back to first available chain
-                        chain_info = next((chain for chain in chains if chain.get("chainName") == "BSC"), None)
-                        if not chain_info and chains:
-                            chain_info = chains[0]
+                        chain_info = next(
+                            (chain for chain in chains if chain.get("chainName") == "BSC"),
+                            chains[0] if chains else None
+                        )
                         
                         if chain_info:
                             return {
                                 "max_volume": chain_info.get("withdrawalMinSize", "N/A"),
-                                "deposit": "Enabled" if chain_info.get("isDepositEnabled", False) else "Disabled",
-                                "withdraw": "Enabled" if chain_info.get("isWithdrawEnabled", False) else "Disabled"
+                                "deposit": "Enabled" if chain_info.get("isDepositEnabled") else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("isWithdrawEnabled") else "Disabled"
                             }
                 
                 logger.error(f"KuCoin: Failed to get currency info for {symbol}")
                 return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-                
+            
         except Exception as e:
             logger.error(f"Exception in KuCoin.get_deposit_withdraw_info: {e}")
             return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}-USDT"
+        params = {"symbol": formatted_symbol, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get("https://api.kucoin.com/api/v1/market/orderbook/level2_20", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        book = data["data"]
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in book.get("bids", [])],
+                            'asks': [(float(price), float(amount)) for price, amount in book.get("asks", [])],
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"KuCoin Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in KuCoin.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}-USDT"
+        params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
+        try:
+            async with session.get("https://api.kucoin.com/api/v1/market/stats", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "200000" and data.get("data"):
+                        ticker = data["data"]
+                        return {
+                            'last': float(ticker.get("last", 0)),
+                            'bid': float(ticker.get("buy", 0)),
+                            'ask': float(ticker.get("sell", 0)),
+                            'volume': float(ticker.get("vol", 0)),
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"KuCoin Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in KuCoin.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""

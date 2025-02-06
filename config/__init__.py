@@ -1,3 +1,7 @@
+"""
+This file makes the config directory a Python package.
+"""
+
 import os
 from dotenv import load_dotenv
 
@@ -16,12 +20,26 @@ def get_float_env(key: str, default: float) -> float:
         print(f"Warning: Invalid value for {key}, using default {default}. Error: {e}")
         return default
 
-# Replace these with your actual Telegram bot credentials.
-TELEGRAM_TOKEN = 'YOUR_TELEGRAM_TOKEN'
-TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
+def get_int_env(key: str, default: int) -> int:
+    """Safely get integer value from environment variable"""
+    try:
+        value = os.getenv(key)
+        if value is None:
+            return default
+        # Remove any whitespace and convert to int
+        return int(value.strip())
+    except (ValueError, AttributeError) as e:
+        print(f"Warning: Invalid value for {key}, using default {default}. Error: {e}")
+        return default
 
-# Arbitrage threshold (default: 2% spread)
-ARBITRAGE_THRESHOLD = get_float_env('ARBITRAGE_THRESHOLD', 0.02)
+# Bot settings
+ARBITRAGE_THRESHOLD = float(os.getenv("ARBITRAGE_THRESHOLD", "10"))  # Default 10%
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))  # Default 50 tokens per batch
+UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", "60"))  # Default 60 seconds
+
+# Liquidity thresholds
+MIN_CEX_24H_VOLUME = float(os.getenv("MIN_CEX_24H_VOLUME", "1000000"))  # Default $1M
+MIN_DEX_LIQUIDITY = float(os.getenv("MIN_DEX_LIQUIDITY", "500000"))  # Default $500K
 
 # List of tokens to monitor (use token symbols as used by the exchanges)
 WATCHLIST = [
@@ -57,14 +75,6 @@ MEXC_API_SECRET = os.getenv('MEXC_API_SECRET')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# Liquidity Thresholds
-MIN_CEX_24H_VOLUME = get_float_env('MIN_CEX_24H_VOLUME', 1000000)
-MIN_DEX_LIQUIDITY = get_float_env('MIN_DEX_LIQUIDITY', 500000)
-
-# Rate Limiting and Performance Settings
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', '10'))  # Number of tokens to process in parallel
-UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # Seconds between full update cycles
-
 # Retry Settings
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
-RETRY_DELAY = int(os.getenv('RETRY_DELAY', '5'))  # Seconds between retries
+RETRY_DELAY = int(os.getenv('RETRY_DELAY', '5'))  # Seconds between retries 

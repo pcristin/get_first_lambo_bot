@@ -206,3 +206,71 @@ class GateIO(BaseCEX):
         except Exception as e:
             logger.error(f"Exception in GateIO.get_spot_symbols: {e}")
             return []
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        currency_pair = f"{symbol}_USDT"
+        params = {"currency_pair": currency_pair, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get("https://api.gateio.ws/api/v4/spot/order_book", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("bids") and data.get("asks"):
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in data["bids"]],
+                            'asks': [(float(price), float(amount)) for price, amount in data["asks"]],
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"Gate.io Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in GateIO.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        currency_pair = f"{symbol}_USDT"
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for ticker in data:
+                        if ticker.get("currency_pair") == currency_pair:
+                            return {
+                                'last': float(ticker.get("last", 0)),
+                                'bid': float(ticker.get("highest_bid", 0)),
+                                'ask': float(ticker.get("lowest_ask", 0)),
+                                'volume': float(ticker.get("base_volume", 0)),
+                                'timestamp': int(time.time() * 1000)
+                            }
+                    logger.error(f"Gate.io: Ticker for {symbol} not found")
+                    return {
+                        'last': 0,
+                        'bid': 0,
+                        'ask': 0,
+                        'volume': 0,
+                        'timestamp': int(time.time() * 1000)
+                    }
+                logger.error(f"Gate.io Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in GateIO.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }

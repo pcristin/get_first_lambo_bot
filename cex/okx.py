@@ -94,66 +94,95 @@ class OKX(BaseCEX):
             logger.error(f"Exception in OKX.get_futures_price: {e}")
             return None
 
-    async def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
         Gets deposit and withdrawal information for a token using OKX's private API.
-        Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status, and withdrawal fees.
         """
         try:
+            await self._acquire_private_rate_limit()
             timestamp = str(int(time.time() * 1000))
-            request_path = "/api/v5/asset/currencies"
             
-            signature = self._generate_signature(timestamp, "GET", request_path)
+            # Get currency info
+            currencies_path = "/api/v5/asset/currencies"
             
+            signature = self._generate_signature(timestamp, "GET", currencies_path)
             headers = {
                 "OK-ACCESS-KEY": self.api_key,
                 "OK-ACCESS-SIGN": signature,
                 "OK-ACCESS-TIMESTAMP": timestamp,
-                "OK-ACCESS-PASSPHRASE": self.api_passphrase,
-                "x-simulated-trading": "0"
+                "OK-ACCESS-PASSPHRASE": self.api_passphrase
             }
             
             session = await self._get_session()
             
+            # Get currency info including withdrawal limits and chain info
             async with session.get(
-                self.CURRENCIES_API_URL,
+                f"{self.PRIVATE_API_URL}{currencies_path}",
                 headers=headers
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("code") == "0" and data.get("data"):
                         # Find the currency info
-                        currency_info = next(
-                            (curr for curr in data["data"] if curr.get("ccy") == symbol),
-                            None
-                        )
+                        currency_info = None
+                        for curr in data["data"]:
+                            if curr.get("ccy") == symbol:
+                                currency_info = curr
+                                break
                         
                         if currency_info:
-                            # Try to find BSC chain first, fall back to first available chain
+                            # Get chain info
+                            chains = currency_info.get("chains", [])
                             chain_info = next(
-                                (chain for chain in currency_info.get("chains", [])
-                                 if chain.get("chain") == "BSC"),
-                                None
+                                (chain for chain in chains if chain.get("chain") == "BSC"),
+                                next(iter(chains), None) if chains else None
                             )
-                            if not chain_info and currency_info.get("chains"):
-                                chain_info = currency_info["chains"][0]
                             
                             if chain_info:
+                                # Get withdrawal fee info
+                                min_fee = chain_info.get("minFee", "N/A")
+                                max_fee = chain_info.get("maxFee", min_fee)
+                                fee_info = f"{min_fee}"
+                                if max_fee != min_fee:
+                                    fee_info += f"-{max_fee}"
+                                
                                 return {
                                     "max_volume": chain_info.get("maxWd", "N/A"),
                                     "deposit": "Enabled" if chain_info.get("canDep") == "1" else "Disabled",
-                                    "withdraw": "Enabled" if chain_info.get("canWd") == "1" else "Disabled"
+                                    "withdraw": "Enabled" if chain_info.get("canWd") == "1" else "Disabled",
+                                    "withdraw_fee": fee_info
                                 }
-                    
-                    logger.error(f"OKX: Failed to get currency info for {symbol}")
-                    return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                            else:
+                                # If no chain info, use main currency status
+                                return {
+                                    "max_volume": currency_info.get("maxWd", "N/A"),
+                                    "deposit": "Enabled" if currency_info.get("canDep") == "1" else "Disabled",
+                                    "withdraw": "Enabled" if currency_info.get("canWd") == "1" else "Disabled",
+                                    "withdraw_fee": "N/A"
+                                }
+                        
+                        logger.error(f"OKX: Currency {symbol} not found in response")
+                    else:
+                        logger.error(f"OKX: Invalid response format for {symbol}: {data}")
                 else:
-                    logger.error(f"OKX API error: {response.status}")
-                    return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                    logger.error(f"OKX API error: Status {response.status}")
             
+            return {
+                "max_volume": "N/A", 
+                "deposit": "N/A", 
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A"
+            }
+                
         except Exception as e:
             logger.error(f"Exception in OKX.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A", 
+                "deposit": "N/A", 
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""
@@ -271,3 +300,65 @@ class OKX(BaseCEX):
         except Exception as e:
             logger.error(f"Exception in OKX.get_spot_symbols: {e}")
             return []
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        instId = f"{symbol}-USDT"
+        params = {"instId": instId, "sz": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/market/books", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "0" and data.get("data"):
+                        book = data["data"][0]
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount, *_ in book.get("bids", [])],
+                            'asks': [(float(price), float(amount)) for price, amount, *_ in book.get("asks", [])],
+                            'timestamp': int(book.get("ts", time.time() * 1000))
+                        }
+                logger.error(f"OKX Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in OKX.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        instId = f"{symbol}-USDT"
+        params = {"instId": instId}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "0" and data.get("data"):
+                        ticker = data["data"][0]
+                        return {
+                            'last': float(ticker.get("last", 0)),
+                            'bid': float(ticker.get("bidPx", 0)),
+                            'ask': float(ticker.get("askPx", 0)),
+                            'volume': float(ticker.get("vol24h", 0)),
+                            'timestamp': int(ticker.get("ts", time.time() * 1000))
+                        }
+                logger.error(f"OKX Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in OKX.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }

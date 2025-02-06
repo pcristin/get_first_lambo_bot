@@ -19,8 +19,10 @@ A high-performance crypto arbitrage bot that monitors price differences across m
   - Parallel Processing (50 tokens per batch)
   - Automatic Liquidity Analysis
   - Smart Rate Limiting
-  - Telegram Notifications
+  - Telegram Notifications with Localized Number Formatting
   - Deposit/Withdrawal Status Checking
+  - Zero Division Protection
+  - Enhanced Threshold Handling
 
 - **Performance Optimizations**:
   - Asynchronous API Calls
@@ -88,10 +90,23 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 
 # Optional Settings
-ARBITRAGE_THRESHOLD=0.01  # 1% minimum spread
+ARBITRAGE_THRESHOLD=10  # 10% minimum spread (enter as whole number)
 MIN_CEX_24H_VOLUME=1000000  # Minimum 24h volume in USD
 MIN_DEX_LIQUIDITY=500000  # Minimum DEX liquidity in USD
 ```
+
+## Important Configuration Notes
+
+### Arbitrage Threshold
+- Set `ARBITRAGE_THRESHOLD` as a whole number representing the percentage
+- Example: For 10% threshold, use `ARBITRAGE_THRESHOLD=10`
+- The bot will only notify you of opportunities with spreads greater than or equal to this percentage
+- No decimal point needed - the bot handles the percentage conversion internally
+
+### Number Formatting
+- All numerical outputs (logs, notifications) use comma (,) as the decimal separator
+- Thousands are separated by dots (.) for better readability
+- Example: "1.234,56" represents one thousand two hundred thirty-four and 56/100
 
 ## Usage
 
@@ -109,7 +124,7 @@ The bot will:
 ## Notifications
 
 The bot sends detailed Telegram notifications for each arbitrage opportunity, including:
-- Token symbol and current prices
+- Token symbol and current prices (with localized number formatting)
 - Spread percentage and absolute difference
 - Trading volume and liquidity information
 - Deposit/withdrawal status for each exchange
@@ -125,10 +140,12 @@ The bot implements smart rate limiting for each exchange:
 
 ## Error Handling
 
+- Zero division protection in spread calculations
 - Automatic retry on temporary failures
 - Connection pool management
 - Graceful shutdown on interruption
 - Detailed error logging
+- Validation of price and volume data before calculations
 
 ## Contributing
 

@@ -240,3 +240,65 @@ class Bybit(BaseCEX):
         except Exception as e:
             logger.error(f"Exception in Bybit.get_spot_symbols: {e}")
             return []
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/v5/market/orderbook", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("retCode") == 0 and data.get("result"):
+                        book = data["result"]
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in book.get("b", [])],
+                            'asks': [(float(price), float(amount)) for price, amount in book.get("a", [])],
+                            'timestamp': int(book.get("ts", time.time() * 1000))
+                        }
+                logger.error(f"Bybit Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in Bybit.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/v5/market/tickers", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("retCode") == 0 and data.get("result"):
+                        ticker = data["result"]["list"][0]
+                        return {
+                            'last': float(ticker.get("lastPrice", 0)),
+                            'bid': float(ticker.get("bid1Price", 0)),
+                            'ask': float(ticker.get("ask1Price", 0)),
+                            'volume': float(ticker.get("volume24h", 0)),
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"Bybit Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in Bybit.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }

@@ -246,3 +246,62 @@ class Binance(BaseCEX):
         except Exception as e:
             logger.error(f"Exception in Binance.get_spot_symbols: {e}")
             return []
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.SPOT_API_URL}/depth", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("bids") and data.get("asks"):
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in data["bids"]],
+                            'asks': [(float(price), float(amount)) for price, amount in data["asks"]],
+                            'timestamp': data.get("lastUpdateId", int(time.time() * 1000))
+                        }
+                logger.error(f"Binance Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in Binance.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.SPOT_API_URL}/ticker/24hr", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return {
+                        'last': float(data.get("lastPrice", 0)),
+                        'bid': float(data.get("bidPrice", 0)),
+                        'ask': float(data.get("askPrice", 0)),
+                        'volume': float(data.get("volume", 0)),
+                        'timestamp': data.get("closeTime", int(time.time() * 1000))
+                    }
+                logger.error(f"Binance Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in Binance.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }

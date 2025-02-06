@@ -232,3 +232,64 @@ class MEXC(BaseCEX):
         """Close the aiohttp session"""
         if self.session and not self.session.closed:
             await self.session.close()
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}_USDT"
+        params = {"symbol": formatted_symbol, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/api/v3/depth", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("bids") and data.get("asks"):
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in data["bids"]],
+                            'asks': [(float(price), float(amount)) for price, amount in data["asks"]],
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"MEXC Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in MEXC.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}_USDT"
+        params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("success") and data.get("data"):
+                        ticker = data["data"][0]
+                        return {
+                            'last': float(ticker.get("last", 0)),
+                            'bid': float(ticker.get("bid", 0)),
+                            'ask': float(ticker.get("ask", 0)),
+                            'volume': float(ticker.get("volume", 0)),
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"MEXC Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in MEXC.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }

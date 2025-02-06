@@ -244,3 +244,65 @@ class BitGet(BaseCEX):
         except Exception as e:
             logger.error(f"Exception in BitGet.get_spot_symbols: {e}")
             return []
+
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
+        """Get order book for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol, "limit": limit}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(f"{self.PRIVATE_API_URL}/api/spot/v1/market/depth", params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        book = data["data"]
+                        return {
+                            'bids': [(float(price), float(amount)) for price, amount in book.get("bids", [])],
+                            'asks': [(float(price), float(amount)) for price, amount in book.get("asks", [])],
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"BitGet Orderbook API error for {symbol}")
+                return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+        except Exception as e:
+            logger.error(f"Exception in BitGet.get_orderbook: {e}")
+            return {'bids': [], 'asks': [], 'timestamp': int(time.time() * 1000)}
+
+    async def get_ticker(self, symbol: str) -> Dict:
+        """Get 24h ticker data for a symbol"""
+        await self._acquire_market_rate_limit()
+        formatted_symbol = f"{symbol}USDT"
+        params = {"symbol": formatted_symbol}
+        session = await self._get_session()
+        
+        try:
+            async with session.get(self.SPOT_API_URL, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        ticker = data["data"]
+                        return {
+                            'last': float(ticker.get("close", 0)),
+                            'bid': float(ticker.get("bestBid", 0)),
+                            'ask': float(ticker.get("bestAsk", 0)),
+                            'volume': float(ticker.get("baseVolume", 0)),
+                            'timestamp': int(time.time() * 1000)
+                        }
+                logger.error(f"BitGet Ticker API error for {symbol}")
+                return {
+                    'last': 0,
+                    'bid': 0,
+                    'ask': 0,
+                    'volume': 0,
+                    'timestamp': int(time.time() * 1000)
+                }
+        except Exception as e:
+            logger.error(f"Exception in BitGet.get_ticker: {e}")
+            return {
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'volume': 0,
+                'timestamp': int(time.time() * 1000)
+            }
