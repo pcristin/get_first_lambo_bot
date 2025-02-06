@@ -42,8 +42,8 @@ class ArbitrageEngine:
         
         # Verify threshold at startup
         logger.info("🚀 ArbitrageEngine initialized")
-        logger.info(f"🎯 Arbitrage threshold set to: {str(ARBITRAGE_THRESHOLD*100).replace('.', ',')}%")
-        if ARBITRAGE_THRESHOLD < 0.01:  # Less than 0.01%
+        logger.info(f"🎯 Arbitrage threshold set to: {str(ARBITRAGE_THRESHOLD).replace('.', ',')}%")
+        if ARBITRAGE_THRESHOLD < 1:  # Less than 1%
             logger.warning(f"Very low arbitrage threshold detected: {str(ARBITRAGE_THRESHOLD).replace('.', ',')}%. This may generate many signals.")
 
     async def _test_notification(self):
@@ -56,7 +56,7 @@ class ArbitrageEngine:
             stats = await self.db.get_summary_stats()
             
             # In MarkdownV2, we need to escape special characters: . - ! ( )
-            threshold = str(ARBITRAGE_THRESHOLD * 100).replace('.', ',')  # Convert to percentage for display
+            threshold = str(ARBITRAGE_THRESHOLD).replace('.', ',')  # Convert to percentage for display
             message = (
                 "🤖 *Arbitrage Bot Started*\n\n"
                 "⚙️ *Settings:*\n"
@@ -125,138 +125,161 @@ class ArbitrageEngine:
         opportunities = 0
         
         logger.info(f"\n{'='*20} Processing batch of {len(tokens)} tokens {'='*20}")
-        logger.info(f"Tokens in batch: {tokens}")
         
-        # First get DEX data to filter for Solana tokens
-        dex_data_tasks = [self.dex.get_token_data(token) for token in tokens]
-        dex_data_results = await asyncio.gather(*dex_data_tasks, return_exceptions=True)
-        
-        # Filter for Solana tokens and get their contract addresses
-        solana_tokens: Dict[str, Tuple[str, dict]] = {}  # {symbol: (contract, dex_data)}
-        for token, dex_result in zip(tokens, dex_data_results):
-            if isinstance(dex_result, Exception):
-                logger.error(f"Error getting DEX data for {token}: {dex_result}")
-                continue
-            if dex_result is None:
-                logger.warning(f"No DEX data found for {token}")
-                continue
-            if dex_result.get("network") == "solana":
-                contract = dex_result.get("contract")
-                if contract:
-                    solana_tokens[token] = (contract, dex_result)
-                    logger.info(f"Found Solana token: {token} | Contract: {contract}")
-                else:
-                    logger.warning(f"No contract found for Solana token: {token}")
-        
-        if not solana_tokens:
-            logger.info("No Solana tokens found in this batch")
-            return 0
-            
-        logger.info(f"Found {len(solana_tokens)} Solana tokens in batch")
-        logger.info(f"Solana tokens: {list(solana_tokens.keys())}")
-        
-        # Subscribe to real-time updates for new tokens
-        subscription_tasks = []
-        for token in solana_tokens:
-            if token not in self.active_symbols:
-                subscription_tasks.append(self._subscribe_to_symbol(token))
-        
-        if subscription_tasks:
-            await asyncio.gather(*subscription_tasks)
-        
-        # Get Jupiter prices and CEX prices in parallel
-        valid_tokens = list(solana_tokens.keys())
-        jupiter_tasks = [
-            self.jupiter.get_token_price(solana_tokens[token][0]) 
-            for token in valid_tokens
-        ]
-        liquidity_tasks = [self.liquidity_analyzer.analyze_token_liquidity(token) for token in valid_tokens]
-        
-        # Gather all results
-        all_results = await asyncio.gather(
-            *jupiter_tasks, *liquidity_tasks,
-            return_exceptions=True
-        )
-        
-        # Split results
-        num_tokens = len(valid_tokens)
-        jupiter_results = all_results[:num_tokens]
-        liquidity_results = all_results[num_tokens:]
-        
-        # Process each token
-        for i, token in enumerate(valid_tokens):
+        for token in tokens:
             try:
-                jupiter_price = jupiter_results[i]
-                if isinstance(jupiter_price, Exception) or jupiter_price is None:
-                    logger.error(f"Failed to get Jupiter price for {token}: {jupiter_price if isinstance(jupiter_price, Exception) else 'None'}")
-                    continue
-                
-                # Get real-time prices from WebSocket caches
-                binance_price = self.binance_ws.get_cached_price(token)
-                okx_spot_price = self.okx_ws.get_cached_price(token, "spot")
-                okx_futures_price = self.okx_ws.get_cached_price(token, "futures")
-                
-                # Combine prices into the same format as before
-                cex_prices = {
-                    "spot": {
-                        "binance": binance_price,
-                        "okx": okx_spot_price
-                    },
-                    "futures": {
-                        "okx": okx_futures_price
-                    }
-                }
+                # Get prices from all exchanges
+                prices = await self.cex_manager.get_all_prices(token)
                 
                 # Check if we have any valid prices
-                has_valid_prices = False
-                for market_type in ['spot', 'futures']:
-                    if any(price is not None for price in cex_prices[market_type].values()):
-                        has_valid_prices = True
-                        break
+                spot_prices = [(cex, price) for cex, price in prices["spot"].items() if price is not None and price > 0]
+                futures_prices = [(cex, price) for cex, price in prices["futures"].items() if price is not None and price > 0]
                 
-                if not has_valid_prices:
-                    logger.warning(f"No valid CEX prices found for {token}")
-                    continue
+                # First check CEX-to-CEX opportunities
+                # Check spot prices
+                for i, (cex1, price1) in enumerate(spot_prices):
+                    for cex2, price2 in spot_prices[i+1:]:
+                        try:
+                            spread1 = (price1 - price2) / price2 * 100
+                            spread2 = (price2 - price1) / price1 * 100
+                            spread = max(abs(spread1), abs(spread2))
+                            
+                            if spread >= ARBITRAGE_THRESHOLD:
+                                if price1 > price2:
+                                    high_cex, high_price = cex1, price1
+                                    low_cex, low_price = cex2, price2
+                                else:
+                                    high_cex, high_price = cex2, price2
+                                    low_cex, low_price = cex1, price1
+                                
+                                # Get liquidity data for informational purposes only
+                                liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
+                                
+                                # Log opportunity and send notification
+                                opportunity_id = await self.db.log_opportunity(
+                                    token=token,
+                                    spread=spread,
+                                    high_exchange=high_cex,
+                                    high_price=high_price,
+                                    low_exchange=low_cex,
+                                    low_price=low_price,
+                                    market_type="spot",
+                                    volume_24h=liquidity_data.get("total_cex_volume"),
+                                    liquidity_score=liquidity_data.get("liquidity_score")
+                                )
+                                
+                                await self._send_cex_arbitrage_notification(
+                                    token, spread,
+                                    high_cex, high_price,
+                                    low_cex, low_price,
+                                    liquidity_data,
+                                    opportunity_id
+                                )
+                                opportunities += 1
+                                continue  # Move to next token after finding opportunity
+                                
+                        except ZeroDivisionError:
+                            continue
                 
-                # Log the prices we got
-                logger.info(f"\nProcessing {token}:")
-                logger.info(f"Jupiter Price: ${str(jupiter_price).replace('.', ',')}")
-                logger.info("CEX Prices:")
+                # Check futures prices if no spot opportunity found
+                if opportunities == 0:
+                    for i, (cex1, price1) in enumerate(futures_prices):
+                        for cex2, price2 in futures_prices[i+1:]:
+                            try:
+                                spread1 = (price1 - price2) / price2 * 100
+                                spread2 = (price2 - price1) / price1 * 100
+                                spread = max(abs(spread1), abs(spread2))
+                                
+                                if spread >= ARBITRAGE_THRESHOLD:
+                                    if price1 > price2:
+                                        high_cex, high_price = cex1, price1
+                                        low_cex, low_price = cex2, price2
+                                    else:
+                                        high_cex, high_price = cex2, price2
+                                        low_cex, low_price = cex1, price1
+                                    
+                                    # Get liquidity data for informational purposes only
+                                    liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
+                                    
+                                    # Log opportunity and send notification
+                                    opportunity_id = await self.db.log_opportunity(
+                                        token=token,
+                                        spread=spread,
+                                        high_exchange=high_cex,
+                                        high_price=high_price,
+                                        low_exchange=low_cex,
+                                        low_price=low_price,
+                                        market_type="futures",
+                                        volume_24h=liquidity_data.get("total_cex_volume"),
+                                        liquidity_score=liquidity_data.get("liquidity_score")
+                                    )
+                                    
+                                    await self._send_cex_arbitrage_notification(
+                                        token, spread,
+                                        high_cex, high_price,
+                                        low_cex, low_price,
+                                        liquidity_data,
+                                        opportunity_id
+                                    )
+                                    opportunities += 1
+                                    continue  # Move to next token after finding opportunity
+                                    
+                            except ZeroDivisionError:
+                                continue
                 
-                # Format spot prices
-                spot_price_strs = []
-                for cex, price in cex_prices['spot'].items():
-                    if price is not None:
-                        price_str = str(price).replace('.', ',')
-                        spot_price_strs.append(f"{cex}: ${price_str}")
-                logger.info("• Spot: " + ', '.join(spot_price_strs))
+                # If no CEX-to-CEX opportunities found, check DEX
+                if opportunities == 0:
+                    # Get DEX data
+                    dex_data = await self.dex.get_token_data(token)
+                    if dex_data and dex_data.get("network") == "solana" and dex_data.get("price"):
+                        dex_price = dex_data["price"]
+                        
+                        # Check against spot prices
+                        for cex_name, spot_price in spot_prices:
+                            try:
+                                spread1 = (spot_price - dex_price) / dex_price * 100
+                                spread2 = (dex_price - spot_price) / spot_price * 100
+                                spread = max(abs(spread1), abs(spread2))
+                                
+                                if spread >= ARBITRAGE_THRESHOLD:
+                                    # Get liquidity data for informational purposes only
+                                    liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
+                                    
+                                    await self._send_arbitrage_notification(
+                                        token, spread, cex_name, spot_price,
+                                        dex_price, dex_data, liquidity_data, "spot"
+                                    )
+                                    opportunities += 1
+                                    break  # Move to next token after finding opportunity
+                                    
+                            except ZeroDivisionError:
+                                continue
+                        
+                        # Check against futures prices if no spot-DEX opportunity found
+                        if opportunities == 0:
+                            for cex_name, futures_price in futures_prices:
+                                try:
+                                    spread1 = (futures_price - dex_price) / dex_price * 100
+                                    spread2 = (dex_price - futures_price) / futures_price * 100
+                                    spread = max(abs(spread1), abs(spread2))
+                                    
+                                    if spread >= ARBITRAGE_THRESHOLD:
+                                        # Get liquidity data for informational purposes only
+                                        liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
+                                        
+                                        await self._send_arbitrage_notification(
+                                            token, spread, cex_name, futures_price,
+                                            dex_price, dex_data, liquidity_data, "futures"
+                                        )
+                                        opportunities += 1
+                                        break  # Move to next token after finding opportunity
+                                        
+                                except ZeroDivisionError:
+                                    continue
                 
-                # Format futures prices
-                futures_price_strs = []
-                for cex, price in cex_prices['futures'].items():
-                    if price is not None:
-                        price_str = str(price).replace('.', ',')
-                        futures_price_strs.append(f"{cex}: ${price_str}")
-                logger.info("• Futures: " + ', '.join(futures_price_strs))
-                
-                liquidity_data = liquidity_results[i]
-                if isinstance(liquidity_data, Exception):
-                    logger.warning(f"Failed to get liquidity data for {token}, using defaults")
-                    liquidity_data = {
-                        "has_sufficient_liquidity": False,
-                        "total_cex_volume": 0,
-                        "total_dex_liquidity": 0
-                    }
-                
-                # Process with Jupiter price instead of DEXscreener price
-                opportunities += await self._process_single_token(
-                    token, 
-                    {"price": jupiter_price, **solana_tokens[token][1]},
-                    liquidity_data,
-                    cex_prices
-                )
             except Exception as e:
                 logger.error(f"Error processing token {token}: {e}")
+                continue
                 
         logger.info(f"\nBatch processing complete. Found {opportunities} opportunities.")
         return opportunities
@@ -397,7 +420,7 @@ class ArbitrageEngine:
                         # Calculate spread both ways to ensure we don't miss opportunities
                         spread1 = (spot_price - dex_price) / dex_price * 100  # DEX -> CEX (in percentage)
                         spread2 = (dex_price - spot_price) / spot_price * 100  # CEX -> DEX (in percentage)
-                        spread = max(abs(spread1), abs(spread2))  # Get max spread in percentage
+                        spread = max(abs(spread1), abs(spread2))
                         
                         if spread >= ARBITRAGE_THRESHOLD:  # Both values are in percentage now
                             # Get liquidity data only when we find an opportunity
@@ -425,7 +448,7 @@ class ArbitrageEngine:
                         # Calculate spread both ways to ensure we don't miss opportunities
                         spread1 = (futures_price - dex_price) / dex_price * 100  # DEX -> CEX (in percentage)
                         spread2 = (dex_price - futures_price) / futures_price * 100  # CEX -> DEX (in percentage)
-                        spread = max(abs(spread1), abs(spread2))  # Get max spread in percentage
+                        spread = max(abs(spread1), abs(spread2))
                         
                         if spread >= ARBITRAGE_THRESHOLD:  # Both values are in percentage now
                             # Get liquidity data only when we find an opportunity
@@ -480,13 +503,13 @@ class ArbitrageEngine:
             potential_profit = (1000 * spread / 100)  # Convert percentage to decimal for calculation
 
             # Escape special characters in numbers and text
-            spread_str = f"{spread:.2f}".replace('.', ',')
+            spread_str = f"{spread:.4f}".replace('.', ',')
             price_diff_str = f"{price_diff_usd:.4f}".replace('.', ',')
             cex_price_str = f"{cex_price:.4f}".replace('.', ',')
             dex_price_str = f"{dex_price:.4f}".replace('.', ',')
             total_volume_str = f"{total_volume:,.2f}".replace('.', ',')
             dex_liquidity_str = f"{dex_data['liquidity']:,.2f}".replace('.', ',')
-            potential_profit_str = f"{potential_profit:.2f}".replace('.', ',')
+            potential_profit_str = f"{potential_profit:.4f}".replace('.', ',')
             current_time = time.strftime('%Y\\-%m\\-%d %H:%M:%S UTC')
             network = dex_data.get('network', 'Unknown').replace("-", "\\-")
             contract = dex_data.get('contract', '').replace("-", "\\-")
@@ -530,20 +553,53 @@ class ArbitrageEngine:
                                          opportunity_id: Optional[int] = None):
         """Send notification for CEX-CEX arbitrage opportunity"""
         try:
-            # Format message with MarkdownV2 escaping
+            # Get deposit/withdraw info for both exchanges
+            dw_info = await self.cex_manager.get_deposit_withdraw_info(token_symbol)
+            high_cex_info = dw_info.get(high_cex, {})
+            low_cex_info = dw_info.get(low_cex, {})
+
+            # Build clickable links - escape special characters in URLs
+            high_cex_link = f"https://www\\.{high_cex.lower()}\\.com/trade/{token_symbol}_USDT"
+            low_cex_link = f"https://www\\.{low_cex.lower()}\\.com/trade/{token_symbol}_USDT"
+
+            # Calculate price difference and potential profit
+            price_diff = abs(high_price - low_price)
+            potential_profit = (1000 * spread / 100)  # Convert percentage to decimal for calculation
+
+            # Format current time
+            current_time = time.strftime('%Y\\-%m\\-%d %H:%M:%S UTC')
+
+            # Format message with proper escaping for MarkdownV2
             message = (
-                "🔥 *CEX\\-CEX Arbitrage Opportunity*\n\n"
-                f"🪙 Token: `{token_symbol}`\n"
-                f"📊 Spread: `{str(spread).replace('.', ',')}%`\n\n"
-                "💰 *Prices:*\n"
-                f"• {high_cex}: `${str(high_price).replace('.', ',')}`\n"
-                f"• {low_cex}: `${str(low_price).replace('.', ',')}`\n\n"
-                "📈 *Liquidity:*\n"
-                f"• 24h Volume: `${str(liquidity_analysis.get('total_cex_volume', 0)).replace('.', ',')}`\n"
-                f"• Score: `{str(liquidity_analysis.get('liquidity_score', 0)).replace('.', ',')}`\n\n"
-                "🔄 *Trade Route:*\n"
-                f"1\\. Buy on {low_cex}\n"
-                f"2\\. Sell on {high_cex}"
+                f"🚨 *НОВЫЙ CEX\\-CEX АРБИТРАЖ\\!* 🚨\n\n"
+                f"💎 *Токен:* `{token_symbol}`\n"
+                f"📊 *Спред:* `{spread:.4f}%` _\\(${price_diff:.4f}\\)_\n\n"
+                
+                f"🔄 *Цены:*\n"
+                f"• {high_cex} \\([Торговать]({high_cex_link})\\): `${high_price:.4f}`\n"
+                f"• {low_cex} \\([Торговать]({low_cex_link})\\): `${low_price:.4f}`\n\n"
+                
+                f"💰 *Объем торгов:*\n"
+                f"• Total CEX Volume 24h: `${str(liquidity_analysis.get('total_cex_volume', 0)).replace('.', ',')}`\n\n"
+                
+                f"📈 *Потенциальная прибыль \\(1000 USDT\\):* `${potential_profit:.4f} USDT`\n\n"
+                
+                f"🏦 *{high_cex} Информация:*\n"
+                f"• Max Volume: `{high_cex_info.get('max_volume', 'N/A')}`\n"
+                f"• Deposit: `{high_cex_info.get('deposit', 'N/A')}` {'✅' if high_cex_info.get('deposit') == 'Enabled' else '❌'}\n"
+                f"• Withdraw: `{high_cex_info.get('withdraw', 'N/A')}` {'✅' if high_cex_info.get('withdraw') == 'Enabled' else '❌'}\n"
+                f"• Withdraw Fee: `{high_cex_info.get('withdraw_fee', 'N/A')}`\n"
+                f"• Chain: `{high_cex_info.get('chain', 'N/A')}`\n\n"
+                
+                f"🏦 *{low_cex} Информация:*\n"
+                f"• Max Volume: `{low_cex_info.get('max_volume', 'N/A')}`\n"
+                f"• Deposit: `{low_cex_info.get('deposit', 'N/A')}` {'✅' if low_cex_info.get('deposit') == 'Enabled' else '❌'}\n"
+                f"• Withdraw: `{low_cex_info.get('withdraw', 'N/A')}` {'✅' if low_cex_info.get('withdraw') == 'Enabled' else '❌'}\n"
+                f"• Withdraw Fee: `{low_cex_info.get('withdraw_fee', 'N/A')}`\n"
+                f"• Chain: `{low_cex_info.get('chain', 'N/A')}`\n\n"
+                
+                f"• Тип: `FUTURES`\n"
+                f"• Время: `{current_time}`\n"
             )
             
             success = await self.notifier.send_message(message)
@@ -560,10 +616,7 @@ class ArbitrageEngine:
 
     async def get_available_tokens(self):
         """
-        Fetch available tokens by:
-        1. Getting tokens from the exchange with most listings
-        2. Checking their availability on other exchanges
-        3. Only then checking DEXscreener for Solana tokens
+        Fetch available tokens by getting tokens from the exchange with most listings.
         Returns a list of token symbols.
         """
         try:
@@ -576,40 +629,8 @@ class ArbitrageEngine:
             # Find exchange with the most tokens
             base_exchange, base_tokens = max(exchange_symbols.items(), key=lambda x: len(x[1]))
             logger.info(f"Using {base_exchange} as base exchange with {len(base_tokens)} tokens")
+            return base_tokens
 
-            tokens = []
-            # Process tokens in batches for efficiency
-            batch_size = BATCH_SIZE
-            for i in range(0, len(base_tokens), batch_size):
-                batch = base_tokens[i:i + batch_size]
-                
-                # First check availability on other exchanges (parallel)
-                available_cex_tokens = await self.cex_manager.check_tokens_availability(batch)
-                if not available_cex_tokens:
-                    continue
-
-                # Check DEXscreener for Solana tokens
-                dex_tasks = [self.dex.get_token_data(symbol) for symbol in available_cex_tokens]
-                dex_results = await asyncio.gather(*dex_tasks, return_exceptions=True)
-                
-                # Add only Solana tokens that exist on both CEX and DEX
-                for token, dex_result in zip(available_cex_tokens, dex_results):
-                    if not isinstance(dex_result, Exception) and dex_result is not None:
-                        if dex_result.get("network") == "solana" and dex_result.get("contract"):
-                            if token not in self.known_tokens:
-                                logger.info(f"Found new Solana token {token} listed on both CEX and DEX")
-                                self.known_tokens.add(token)
-                            tokens.append(token)
-
-            # Log changes in available tokens
-            if len(tokens) != len(self.known_tokens):
-                logger.info(f"Total Solana tokens available for arbitrage: {len(tokens)}")
-                removed_tokens = self.known_tokens - set(tokens)
-                if removed_tokens:
-                    logger.info(f"Tokens no longer available: {removed_tokens}")
-                self.known_tokens = set(tokens)
-
-            return tokens
         except Exception as e:
             logger.error(f"Error in get_available_tokens: {e}")
             return []

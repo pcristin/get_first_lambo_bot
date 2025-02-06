@@ -119,39 +119,42 @@ class OKX(BaseCEX):
             # Get currency info including withdrawal limits and chain info
             async with session.get(
                 f"{self.PRIVATE_API_URL}{currencies_path}",
+                params={"ccy": symbol},  # Add currency filter
                 headers=headers
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("code") == "0" and data.get("data"):
-                        # Find the currency info
-                        currency_info = None
-                        for curr in data["data"]:
-                            if curr.get("ccy") == symbol:
-                                currency_info = curr
-                                break
+                        # Find the currency info (should be first item due to filter)
+                        currency_info = data["data"][0] if data["data"] else None
                         
                         if currency_info:
-                            # Get chain info
+                            # Get chain info - prefer BSC, then any available chain
                             chains = currency_info.get("chains", [])
                             chain_info = next(
-                                (chain for chain in chains if chain.get("chain") == "BSC"),
+                                (chain for chain in chains if chain.get("chain", "").upper() == "BSC"),
                                 next(iter(chains), None) if chains else None
                             )
                             
                             if chain_info:
-                                # Get withdrawal fee info
+                                # Format withdrawal fee info
                                 min_fee = chain_info.get("minFee", "N/A")
                                 max_fee = chain_info.get("maxFee", min_fee)
                                 fee_info = f"{min_fee}"
                                 if max_fee != min_fee:
                                     fee_info += f"-{max_fee}"
                                 
+                                # Get withdrawal limits
+                                min_wd = chain_info.get("minWd", "0")
+                                max_wd = chain_info.get("maxWd", "N/A")
+                                max_volume = f"{min_wd}-{max_wd}" if min_wd != "0" else max_wd
+                                
                                 return {
-                                    "max_volume": chain_info.get("maxWd", "N/A"),
+                                    "max_volume": max_volume,
                                     "deposit": "Enabled" if chain_info.get("canDep") == "1" else "Disabled",
                                     "withdraw": "Enabled" if chain_info.get("canWd") == "1" else "Disabled",
-                                    "withdraw_fee": fee_info
+                                    "withdraw_fee": fee_info,
+                                    "chain": chain_info.get("chain", "N/A")
                                 }
                             else:
                                 # If no chain info, use main currency status
@@ -159,7 +162,8 @@ class OKX(BaseCEX):
                                     "max_volume": currency_info.get("maxWd", "N/A"),
                                     "deposit": "Enabled" if currency_info.get("canDep") == "1" else "Disabled",
                                     "withdraw": "Enabled" if currency_info.get("canWd") == "1" else "Disabled",
-                                    "withdraw_fee": "N/A"
+                                    "withdraw_fee": "N/A",
+                                    "chain": "N/A"
                                 }
                         
                         logger.error(f"OKX: Currency {symbol} not found in response")
@@ -172,7 +176,8 @@ class OKX(BaseCEX):
                 "max_volume": "N/A", 
                 "deposit": "N/A", 
                 "withdraw": "N/A",
-                "withdraw_fee": "N/A"
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
             }
                 
         except Exception as e:
@@ -181,7 +186,8 @@ class OKX(BaseCEX):
                 "max_volume": "N/A", 
                 "deposit": "N/A", 
                 "withdraw": "N/A",
-                "withdraw_fee": "N/A"
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
             }
 
     async def get_futures_symbols(self) -> List[str]:
