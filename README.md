@@ -15,20 +15,53 @@ A high-performance crypto arbitrage bot that monitors price differences across m
   - Cross-market Arbitrage (Spot vs Futures)
 
 - **Advanced Features**:
-  - Real-time Price Monitoring
+  - Real-time Price Monitoring via WebSocket
   - Parallel Processing (50 tokens per batch)
   - Automatic Liquidity Analysis
   - Smart Rate Limiting
-  - Telegram Notifications with Localized Number Formatting
-  - Deposit/Withdrawal Status Checking
-  - Zero Division Protection
+  - Telegram Notifications with:
+    - Localized Number Formatting
+    - Direct Trading Links
+    - Deposit/Withdrawal Status
+    - Chain Information
+    - Withdrawal Fees
   - Enhanced Threshold Handling
+  - Suspicious Spread Detection (>100%)
 
 - **Performance Optimizations**:
   - Asynchronous API Calls
   - Connection Pooling
   - Smart Caching
   - Efficient Batch Processing
+  - WebSocket Price Updates
+
+## Trading Links Format
+
+The bot provides direct trading links in notifications with the following format for each exchange:
+
+- **Binance**:
+  - Futures: `https://www.binance.com/en-GB/trade/TOKEN_USDT?type=cross`
+  - Spot: `https://www.binance.com/trade/TOKEN_USDT`
+
+- **OKX**:
+  - Futures: `https://www.okx.com/trade-swap/token-usdt-swap`
+  - Spot: `https://www.okx.com/trade-spot/token-usdt`
+
+- **BitGet**:
+  - Futures: `https://www.bitget.com/futures/usdt/TOKENUSDT`
+  - Spot: `https://www.bitget.com/spot/TOKENUSDT`
+
+- **Bybit**:
+  - Futures: `https://www.bybit.com/trade/usdt/TOKENUSDT`
+  - Spot: `https://www.bybit.com/en/trade/spot/TOKEN/USDT`
+
+- **MEXC**:
+  - Futures: `https://futures.mexc.com/en-GB/exchange/TOKEN_USDT`
+  - Spot: `https://www.mexc.com/en-GB/exchange/TOKEN_USDT?_from=header`
+
+- **Gate.io**:
+  - Futures: `https://www.gate.io/futures/USDT/TOKEN_USDT`
+  - Spot: `https://www.gate.io/trade/TOKEN_USDT`
 
 ## Requirements
 
@@ -36,6 +69,7 @@ A high-performance crypto arbitrage bot that monitors price differences across m
 - aiohttp
 - asyncio
 - python-telegram-bot
+- SQLAlchemy (for database)
 
 ## Installation
 
@@ -101,7 +135,7 @@ MIN_DEX_LIQUIDITY=500000  # Minimum DEX liquidity in USD
 - Set `ARBITRAGE_THRESHOLD` as a whole number representing the percentage
 - Example: For 10% threshold, use `ARBITRAGE_THRESHOLD=10`
 - The bot will only notify you of opportunities with spreads greater than or equal to this percentage
-- No decimal point needed - the bot handles the percentage conversion internally
+- Spreads above 100% are automatically filtered out as suspicious
 
 ### Number Formatting
 - All numerical outputs (logs, notifications) use comma (,) as the decimal separator
@@ -117,7 +151,7 @@ python main.py
 
 The bot will:
 1. Initialize connections to all configured exchanges
-2. Start monitoring prices across all platforms
+2. Start WebSocket connections for real-time price updates
 3. Process tokens in efficient batches
 4. Send notifications when arbitrage opportunities are found
 
@@ -126,9 +160,10 @@ The bot will:
 The bot sends detailed Telegram notifications for each arbitrage opportunity, including:
 - Token symbol and current prices (with localized number formatting)
 - Spread percentage and absolute difference
+- Direct trading links for both spot and futures markets
 - Trading volume and liquidity information
 - Deposit/withdrawal status for each exchange
-- Direct trading links
+- Chain information and withdrawal fees
 - Contract addresses (for DEX trades)
 
 ## Rate Limits
@@ -136,6 +171,7 @@ The bot sends detailed Telegram notifications for each arbitrage opportunity, in
 The bot implements smart rate limiting for each exchange:
 - Market Data: Shared limit across all market data requests
 - Private API: Separate limit for authenticated requests
+- WebSocket: Real-time price updates to minimize API calls
 - Automatic backoff on rate limit errors
 
 ## Error Handling
@@ -145,7 +181,8 @@ The bot implements smart rate limiting for each exchange:
 - Connection pool management
 - Graceful shutdown on interruption
 - Detailed error logging
-- Validation of price and volume data before calculations
+- Validation of price and volume data
+- Suspicious spread detection (>100%)
 
 ## Contributing
 
