@@ -79,55 +79,114 @@ class Binance(BaseCEX):
             logger.error(f"Exception in Binance.get_futures_price: {e}")
             return None
 
-    async def get_deposit_withdraw_info(self, symbol):
+    async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
-        Gets deposit and withdrawal information for a token using Binance's private API.
-        Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
+        Gets deposit and withdrawal information for a token using Binance's API.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status,
+        withdrawal fees and chain information.
+        
+        API Docs: 
+        - https://developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints#exchange-information
+        - https://binance-docs.github.io/apidocs/spot/en/#all-coins-39-information-user_data
         """
         try:
-            timestamp = int(time.time() * 1000)
-            params = {
-                "timestamp": timestamp,
-            }
+            await self._acquire_private_rate_limit()
+            timestamp = str(int(time.time() * 1000))
             
-            signature = self._generate_signature(params)
-            headers = {
-                "X-MBX-APIKEY": self.api_key
-            }
-            
-            params["signature"] = signature
             session = await self._get_session()
             
+            # First get the symbol info from exchange information
             async with session.get(
-                self.CAPITAL_API_URL,
-                params=params,
-                headers=headers
+                f"{self.SPOT_API_URL}/exchangeInfo",
+                params={"symbol": f"{symbol}USDT"}
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    coin_info = next((coin for coin in data if coin["coin"] == symbol), None)
-                    
-                    if coin_info:
-                        network_info = next((network for network in coin_info.get("networkList", []) 
-                                      if network.get("network") == "BSC"), None)
-                        if not network_info:
-                            network_info = coin_info.get("networkList", [{}])[0]
+                    if "symbols" in data:
+                        symbol_info = next(
+                            (s for s in data["symbols"] if s.get("baseAsset") == symbol),
+                            None
+                        )
                         
-                        return {
-                            "max_volume": network_info.get("withdrawMax", "N/A"),
-                            "deposit": "Enabled" if network_info.get("depositEnable", False) else "Disabled",
-                            "withdraw": "Enabled" if network_info.get("withdrawEnable", False) else "Disabled"
-                        }
-                    else:
-                        logger.error(f"Binance: Token {symbol} not found in capital config")
-                        return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-                else:
-                    logger.error(f"Binance API error: {response.status}")
-                    return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-                    
+                        if symbol_info:
+                            # Now get withdrawal info from capital config
+                            params = {
+                                "timestamp": timestamp,
+                                "recvWindow": 5000
+                            }
+                            
+                            signature = self._generate_signature(params)
+                            headers = {
+                                "X-MBX-APIKEY": self.api_key
+                            }
+                            
+                            params["signature"] = signature
+                            
+                            async with session.get(
+                                self.CAPITAL_API_URL,
+                                params=params,
+                                headers=headers
+                            ) as capital_response:
+                                if capital_response.status == 200:
+                                    capital_data = await capital_response.json()
+                                    coin_info = next(
+                                        (coin for coin in capital_data if coin.get("coin") == symbol),
+                                        None
+                                    )
+                                    
+                                    if coin_info:
+                                        networks = coin_info.get("networkList", [])
+                                        
+                                        # Try to find BSC chain first, fall back to first available chain
+                                        network_info = next(
+                                            (net for net in networks if "BSC" in net.get("network", "").upper()),
+                                            next((net for net in networks if net.get("depositEnable")), networks[0] if networks else None)
+                                        )
+                                        
+                                        if network_info:
+                                            # Get withdrawal limits
+                                            min_withdraw = network_info.get("withdrawMin", "N/A")
+                                            max_withdraw = network_info.get("withdrawMax", "N/A")
+                                            
+                                            # Format max volume as range if both min and max are available
+                                            max_volume = f"{min_withdraw}-{max_withdraw}" if min_withdraw != "N/A" and max_withdraw != "N/A" else max_withdraw
+                                            
+                                            # Get withdrawal fee
+                                            withdraw_fee = network_info.get("withdrawFee", "N/A")
+                                            withdraw_fee_percent = network_info.get("withdrawIntegerMultiple", "0")
+                                            
+                                            # Format withdrawal fee string
+                                            if withdraw_fee != "N/A" and float(withdraw_fee_percent) > 0:
+                                                fee_str = f"{withdraw_fee} + {float(withdraw_fee_percent) * 100}%"
+                                            else:
+                                                fee_str = withdraw_fee
+                                            
+                                            return {
+                                                "max_volume": max_volume,
+                                                "deposit": "Enabled" if network_info.get("depositEnable") else "Disabled",
+                                                "withdraw": "Enabled" if network_info.get("withdrawEnable") else "Disabled",
+                                                "withdraw_fee": fee_str,
+                                                "chain": network_info.get("network", "N/A")
+                                            }
+                
+                logger.error(f"Binance: Failed to get currency info for {symbol}")
+                return {
+                    "max_volume": "N/A",
+                    "deposit": "N/A",
+                    "withdraw": "N/A",
+                    "withdraw_fee": "N/A",
+                    "chain": "N/A"
+                }
+                
         except Exception as e:
             logger.error(f"Exception in Binance.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""

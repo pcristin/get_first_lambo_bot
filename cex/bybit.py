@@ -99,8 +99,11 @@ class Bybit(BaseCEX):
 
     async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
-        Gets deposit and withdrawal information for a token using Bybit's private API.
-        Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
+        Gets deposit and withdrawal information for a token using Bybit's API.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status,
+        withdrawal fees and chain information.
+        
+        API Docs: https://bybit-exchange.github.io/docs/v5/asset/coin-info
         """
         try:
             await self._acquire_private_rate_limit()
@@ -133,24 +136,45 @@ class Bybit(BaseCEX):
                         # Try to find BSC chain first, fall back to first available chain
                         chain_info = next(
                             (chain for chain in chains if chain.get("chain") == "BSC"),
-                            None
+                            next((chain for chain in chains if chain.get("chainDeposit") == "1"), None)
                         )
-                        if not chain_info and chains:
-                            chain_info = chains[0]
                         
                         if chain_info:
+                            withdraw_fee = chain_info.get("withdrawFee", "N/A")
+                            withdraw_fee_percent = chain_info.get("withdrawPercentageFee", "0")
+                            
+                            # Format withdrawal fee string
+                            if withdraw_fee != "N/A" and float(withdraw_fee_percent) > 0:
+                                fee_str = f"{withdraw_fee} + {float(withdraw_fee_percent) * 100}%"
+                            else:
+                                fee_str = withdraw_fee
+                            
                             return {
-                                "max_volume": chain_info.get("withdrawLimit", "N/A"),
-                                "deposit": "Enabled" if chain_info.get("depositStatus") else "Disabled",
-                                "withdraw": "Enabled" if chain_info.get("withdrawStatus") else "Disabled"
+                                "max_volume": chain_info.get("remainAmount", "N/A"),
+                                "deposit": "Enabled" if chain_info.get("chainDeposit") == "1" else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("chainWithdraw") == "1" else "Disabled",
+                                "withdraw_fee": fee_str,
+                                "chain": chain_info.get("chain", "N/A")
                             }
                 
                 logger.error(f"Bybit: Failed to get currency info for {symbol}")
-                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                return {
+                    "max_volume": "N/A",
+                    "deposit": "N/A",
+                    "withdraw": "N/A",
+                    "withdraw_fee": "N/A",
+                    "chain": "N/A"
+                }
                 
         except Exception as e:
             logger.error(f"Exception in Bybit.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""

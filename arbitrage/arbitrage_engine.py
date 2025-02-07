@@ -144,6 +144,11 @@ class ArbitrageEngine:
                             spread2 = (price2 - price1) / price1 * 100
                             spread = max(abs(spread1), abs(spread2))
                             
+                            # Skip if spread is too high (likely different tokens with same ticker)
+                            if spread > 100:
+                                logger.warning(f"Skipping {token} due to suspiciously high spread ({spread:.2f}%) between {cex1} and {cex2}")
+                                continue
+                            
                             if spread >= ARBITRAGE_THRESHOLD:
                                 if price1 > price2:
                                     high_cex, high_price = cex1, price1
@@ -189,6 +194,11 @@ class ArbitrageEngine:
                                 spread1 = (price1 - price2) / price2 * 100
                                 spread2 = (price2 - price1) / price1 * 100
                                 spread = max(abs(spread1), abs(spread2))
+                                
+                                # Skip if spread is too high (likely different tokens with same ticker)
+                                if spread > 100:
+                                    logger.warning(f"Skipping {token} due to suspiciously high spread ({spread:.2f}%) between {cex1} and {cex2}")
+                                    continue
                                 
                                 if spread >= ARBITRAGE_THRESHOLD:
                                     if price1 > price2:
@@ -241,6 +251,11 @@ class ArbitrageEngine:
                                 spread2 = (dex_price - spot_price) / spot_price * 100
                                 spread = max(abs(spread1), abs(spread2))
                                 
+                                # Skip if spread is too high (likely different tokens with same ticker)
+                                if spread > 100:
+                                    logger.warning(f"Skipping {token} due to suspiciously high spread ({spread:.2f}%) between DEX and {cex_name}")
+                                    continue
+                                
                                 if spread >= ARBITRAGE_THRESHOLD:
                                     # Get liquidity data for informational purposes only
                                     liquidity_data = await self.liquidity_analyzer.analyze_token_liquidity(token)
@@ -262,6 +277,11 @@ class ArbitrageEngine:
                                     spread1 = (futures_price - dex_price) / dex_price * 100
                                     spread2 = (dex_price - futures_price) / futures_price * 100
                                     spread = max(abs(spread1), abs(spread2))
+                                    
+                                    # Skip if spread is too high (likely different tokens with same ticker)
+                                    if spread > 100:
+                                        logger.warning(f"Skipping {token} due to suspiciously high spread ({spread:.2f}%) between DEX and {cex_name}")
+                                        continue
                                     
                                     if spread >= ARBITRAGE_THRESHOLD:
                                         # Get liquidity data for informational purposes only
@@ -489,7 +509,7 @@ class ArbitrageEngine:
             cex_info = dw_info.get(cex_name, {})
 
             # Build clickable links - escape special characters in URLs
-            cex_link = f"https://www\\.{cex_name.lower()}\\.com/trade/{token_symbol}_USDT"
+            cex_link = self._get_trading_link(cex_name, token_symbol, market_type)
             dex_link = dex_data["dex_url"].replace(".", "\\.").replace("-", "\\-")
 
             # Get volumes from all exchanges
@@ -546,6 +566,44 @@ class ArbitrageEngine:
         except Exception as e:
             logger.error(f"Error sending notification for {token_symbol}: {e}")
 
+    def _get_trading_link(self, exchange: str, token: str, market_type: str) -> str:
+        """Generate properly formatted trading link for each exchange"""
+        # Escape special characters for Telegram MarkdownV2 format
+        token = token.upper()
+        
+        if exchange == "Binance":
+            if market_type.lower() == "futures":
+                return f"https://www\\.binance\\.com/en\\-GB/trade/{token}_USDT\\?type\\=cross"
+            return f"https://www\\.binance\\.com/trade/{token}_USDT"
+            
+        elif exchange == "OKX":
+            if market_type.lower() == "futures":
+                return f"https://www\\.okx\\.com/trade\\-swap/{token.lower()}\\-usdt\\-swap"
+            return f"https://www\\.okx\\.com/trade\\-spot/{token.lower()}\\-usdt"
+            
+        elif exchange == "BitGet":
+            if market_type.lower() == "futures":
+                return f"https://www\\.bitget\\.com/futures/usdt/{token}USDT"
+            return f"https://www\\.bitget\\.com/spot/{token}USDT"
+            
+        elif exchange == "Bybit":
+            if market_type.lower() == "futures":
+                return f"https://www\\.bybit\\.com/trade/usdt/{token}USDT"
+            return f"https://www\\.bybit\\.com/en/trade/spot/{token}/USDT"
+            
+        elif exchange == "MEXC":
+            if market_type.lower() == "futures":
+                return f"https://futures\\.mexc\\.com/en\\-GB/exchange/{token}_USDT"
+            return f"https://www\\.mexc\\.com/en\\-GB/exchange/{token}_USDT\\?_from\\=header"
+            
+        elif exchange == "Gate.io":
+            if market_type.lower() == "futures":
+                return f"https://www\\.gate\\.io/futures/USDT/{token}_USDT"
+            return f"https://www\\.gate\\.io/trade/{token}_USDT"
+            
+        # Default format for other exchanges
+        return f"https://www\\.{exchange.lower()}\\.com/trade/{token}_USDT"
+
     async def _send_cex_arbitrage_notification(self, token_symbol, spread, 
                                          high_cex, high_price,
                                          low_cex, low_price,
@@ -558,54 +616,58 @@ class ArbitrageEngine:
             high_cex_info = dw_info.get(high_cex, {})
             low_cex_info = dw_info.get(low_cex, {})
 
-            # Build clickable links - escape special characters in URLs
-            high_cex_link = f"https://www\\.{high_cex.lower()}\\.com/trade/{token_symbol}_USDT"
-            low_cex_link = f"https://www\\.{low_cex.lower()}\\.com/trade/{token_symbol}_USDT"
+            market_type = liquidity_analysis.get('market_type', 'spot')
+            
+            # Get properly formatted trading links
+            high_cex_link = self._get_trading_link(high_cex, token_symbol, market_type)
+            low_cex_link = self._get_trading_link(low_cex, token_symbol, market_type)
 
-            # Calculate price difference and potential profit
+            # Format numbers with comma as decimal separator
+            spread_str = f"{spread:.2f}".replace('.', ',')
+            high_price_str = f"{high_price:.4f}".replace('.', ',')
+            low_price_str = f"{low_price:.4f}".replace('.', ',')
             price_diff = abs(high_price - low_price)
-            potential_profit = (1000 * spread / 100)  # Convert percentage to decimal for calculation
+            price_diff_str = f"{price_diff:.4f}".replace('.', ',')
+            potential_profit = (1000 * spread / 100)
+            potential_profit_str = f"{potential_profit:.2f}".replace('.', ',')
+            volume_str = f"{liquidity_analysis.get('total_cex_volume', 0):,.0f}".replace('.', ',')
 
             # Format current time
-            current_time = time.strftime('%Y\\-%m\\-%d %H:%M:%S UTC')
+            current_time = time.strftime('%H:%M:%S')
+
+            # Escape special characters in exchange names
+            high_cex_escaped = high_cex.replace("-", "\\-").replace(".", "\\.")
+            low_cex_escaped = low_cex.replace("-", "\\-").replace(".", "\\.")
 
             # Format message with proper escaping for MarkdownV2
             message = (
-                f"🚨 *НОВЫЙ CEX\\-CEX АРБИТРАЖ\\!* 🚨\n\n"
-                f"💎 *Токен:* `{token_symbol}`\n"
-                f"📊 *Спред:* `{spread:.4f}%` _\\(${price_diff:.4f}\\)_\n\n"
+                f"💰 *ARBITRAGE OPPORTUNITY* 💰\n\n"
                 
-                f"🔄 *Цены:*\n"
-                f"• {high_cex} \\([Торговать]({high_cex_link})\\): `${high_price:.4f}`\n"
-                f"• {low_cex} \\([Торговать]({low_cex_link})\\): `${low_price:.4f}`\n\n"
+                f"🎯 *{spread_str}% Spread Found\\!*\n"
+                f"💎 Token: `{token_symbol}`\n"
+                f"💵 Profit on 1K USDT: `${potential_profit_str}`\n\n"
                 
-                f"💰 *Объем торгов:*\n"
-                f"• Total CEX Volume 24h: `${str(liquidity_analysis.get('total_cex_volume', 0)).replace('.', ',')}`\n\n"
-                
-                f"📈 *Потенциальная прибыль \\(1000 USDT\\):* `${potential_profit:.4f} USDT`\n\n"
-                
-                f"🏦 *{high_cex} Информация:*\n"
-                f"• Max Volume: `{high_cex_info.get('max_volume', 'N/A')}`\n"
-                f"• Deposit: `{high_cex_info.get('deposit', 'N/A')}` {'✅' if high_cex_info.get('deposit') == 'Enabled' else '❌'}\n"
-                f"• Withdraw: `{high_cex_info.get('withdraw', 'N/A')}` {'✅' if high_cex_info.get('withdraw') == 'Enabled' else '❌'}\n"
-                f"• Withdraw Fee: `{high_cex_info.get('withdraw_fee', 'N/A')}`\n"
-                f"• Chain: `{high_cex_info.get('chain', 'N/A')}`\n\n"
-                
-                f"🏦 *{low_cex} Информация:*\n"
-                f"• Max Volume: `{low_cex_info.get('max_volume', 'N/A')}`\n"
-                f"• Deposit: `{low_cex_info.get('deposit', 'N/A')}` {'✅' if low_cex_info.get('deposit') == 'Enabled' else '❌'}\n"
-                f"• Withdraw: `{low_cex_info.get('withdraw', 'N/A')}` {'✅' if low_cex_info.get('withdraw') == 'Enabled' else '❌'}\n"
-                f"• Withdraw Fee: `{low_cex_info.get('withdraw_fee', 'N/A')}`\n"
+                f"📈 *Buy on {low_cex_escaped}*\n"
+                f"• Price: `${low_price_str}`\n"
+                f"• [Open Trade]({low_cex_link})\n"
+                f"• Deposit: {'✅' if low_cex_info.get('deposit') == 'Enabled' else '❌'}\n"
                 f"• Chain: `{low_cex_info.get('chain', 'N/A')}`\n\n"
                 
-                f"• Тип: `FUTURES`\n"
-                f"• Время: `{current_time}`\n"
+                f"📉 *Sell on {high_cex_escaped}*\n"
+                f"• Price: `${high_price_str}`\n"
+                f"• [Open Trade]({high_cex_link})\n"
+                f"• Withdraw: {'✅' if high_cex_info.get('withdraw') == 'Enabled' else '❌'}\n"
+                f"• Fee: `{high_cex_info.get('withdraw_fee', 'N/A')}`\n\n"
+                
+                f"ℹ️ *Details*\n"
+                f"• Volume 24h: `${volume_str}`\n"
+                f"• Type: `{market_type.upper()}`\n"
+                f"• Time: `{current_time}`"
             )
             
             success = await self.notifier.send_message(message)
             
             if success and opportunity_id:
-                # Update notification status in database
                 await self.db.execute(
                     "UPDATE opportunities SET notification_sent = 1 WHERE id = ?",
                     (opportunity_id,)
@@ -697,7 +759,7 @@ class ArbitrageEngine:
                     # Calculate spread both ways to ensure we don't miss opportunities
                     spread1 = (futures_price - dex_data["price"]) / dex_data["price"] * 100  # DEX -> CEX (in percentage)
                     spread2 = (dex_data["price"] - futures_price) / futures_price * 100  # CEX -> DEX (in percentage)
-                    spread = max(abs(spread1), abs(spread2))  # Get max spread in percentage
+                    spread = max(abs(spread1), abs(spread2))
                     
                     if spread >= ARBITRAGE_THRESHOLD:  # Both values are in percentage now
                         best_opportunities.append({

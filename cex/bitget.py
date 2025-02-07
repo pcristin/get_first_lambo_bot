@@ -104,15 +104,18 @@ class BitGet(BaseCEX):
 
     async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
-        Gets deposit and withdrawal information for a token using BitGet's private API.
-        Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
+        Gets deposit and withdrawal information for a token using BitGet's API.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status,
+        withdrawal fees and chain information.
+        
+        API Docs: https://www.bitget.com/api-doc/spot/market/Get-Coin-List
         """
         try:
             await self._acquire_private_rate_limit()
             timestamp = str(int(time.time() * 1000))
-            request_path = "/api/spot/v1/public/currencies"
             
-            signature = self._generate_signature(timestamp, "GET", request_path)
+            # Generate signature
+            signature = self._generate_signature(timestamp, "GET", "/api/spot/v1/public/currencies")
             
             headers = {
                 "ACCESS-KEY": self.api_key,
@@ -131,35 +134,55 @@ class BitGet(BaseCEX):
                 if response.status == 200:
                     data = await response.json()
                     if data.get("code") == "00000" and data.get("data"):
-                        # Find the currency info
-                        currency_info = next(
-                            (curr for curr in data["data"] if curr.get("coinName") == symbol),
+                        # Find the currency info for our symbol
+                        coin_info = next(
+                            (coin for coin in data["data"] if coin.get("coinName") == symbol),
                             None
                         )
                         
-                        if currency_info:
+                        if coin_info:
+                            chains = coin_info.get("chains", [])
+                            
                             # Try to find BSC chain first, fall back to first available chain
-                            chains = currency_info.get("chains", [])
                             chain_info = next(
-                                (chain for chain in chains if chain.get("chain") == "BSC"),
-                                None
+                                (chain for chain in chains if chain.get("chain", "").upper() == "BSC"),
+                                next((chain for chain in chains if chain.get("depositStatus") == "1"), None)
                             )
-                            if not chain_info and chains:
-                                chain_info = chains[0]
                             
                             if chain_info:
+                                withdraw_fee = chain_info.get("withdrawFee", "N/A")
+                                min_withdraw = chain_info.get("withdrawMinAmount", "N/A")
+                                max_withdraw = chain_info.get("withdrawMaxAmount", "N/A")
+                                
+                                # Format max volume as range if both min and max are available
+                                max_volume = f"{min_withdraw}-{max_withdraw}" if min_withdraw != "N/A" and max_withdraw != "N/A" else max_withdraw
+                                
                                 return {
-                                    "max_volume": chain_info.get("withdrawMax", "N/A"),
-                                    "deposit": "Enabled" if chain_info.get("depositEnable") else "Disabled",
-                                    "withdraw": "Enabled" if chain_info.get("withdrawEnable") else "Disabled"
+                                    "max_volume": max_volume,
+                                    "deposit": "Enabled" if chain_info.get("depositStatus") == "1" else "Disabled",
+                                    "withdraw": "Enabled" if chain_info.get("withdrawStatus") == "1" else "Disabled",
+                                    "withdraw_fee": withdraw_fee,
+                                    "chain": chain_info.get("chain", "N/A")
                                 }
                 
                 logger.error(f"BitGet: Failed to get currency info for {symbol}")
-                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
-            
+                return {
+                    "max_volume": "N/A",
+                    "deposit": "N/A",
+                    "withdraw": "N/A",
+                    "withdraw_fee": "N/A",
+                    "chain": "N/A"
+                }
+                
         except Exception as e:
             logger.error(f"Exception in BitGet.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""

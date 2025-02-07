@@ -90,17 +90,20 @@ class GateIO(BaseCEX):
 
     async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
         """
-        Gets deposit and withdrawal information for a token using Gate.io's private API.
-        Returns a dictionary containing max withdrawal amount and deposit/withdrawal status.
+        Gets deposit and withdrawal information for a token using Gate.io's API.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status,
+        withdrawal fees and chain information.
+        
+        API Docs: https://www.gate.io/docs/developers/apiv4/#get-details-of-a-specific-currency
         """
         try:
             await self._acquire_private_rate_limit()
-            url = f"/api/v4/spot/currencies/{symbol}"
+            url = f"/api/v4/currencies/{symbol}"
             headers = self._generate_signature("GET", url)
             session = await self._get_session()
             
             async with session.get(
-                f"{self.CURRENCY_API_URL}/{symbol}",
+                f"{self.PRIVATE_API_URL}{url}",
                 headers=headers
             ) as response:
                 if response.status == 200:
@@ -109,23 +112,55 @@ class GateIO(BaseCEX):
                         chains = data.get("chains", [])
                         
                         # Try to find BSC chain first, fall back to first available chain
-                        chain_info = next((chain for chain in chains if chain.get("chain") == "BSC"), None)
-                        if not chain_info and chains:
-                            chain_info = chains[0]
+                        chain_info = next(
+                            (chain for chain in chains if chain.get("chain_name", "").upper() == "BSC"),
+                            next((chain for chain in chains if chain.get("is_deposit_enabled")), None)
+                        )
                         
                         if chain_info:
+                            # Get withdrawal limits
+                            min_withdraw = chain_info.get("withdraw_limit_min", "N/A")
+                            max_withdraw = chain_info.get("withdraw_limit_max", "N/A")
+                            
+                            # Format max volume as range if both min and max are available
+                            max_volume = f"{min_withdraw}-{max_withdraw}" if min_withdraw != "N/A" and max_withdraw != "N/A" else max_withdraw
+                            
+                            # Get withdrawal fee
+                            withdraw_fee = chain_info.get("withdraw_fix_fee", "N/A")
+                            withdraw_fee_percent = chain_info.get("withdraw_percent_fee", "0")
+                            
+                            # Format withdrawal fee string
+                            if withdraw_fee != "N/A" and float(withdraw_fee_percent) > 0:
+                                fee_str = f"{withdraw_fee} + {float(withdraw_fee_percent) * 100}%"
+                            else:
+                                fee_str = withdraw_fee
+                            
                             return {
-                                "max_volume": chain_info.get("withdraw_max", "N/A"),
-                                "deposit": "Enabled" if chain_info.get("deposit_status") == "enable" else "Disabled",
-                                "withdraw": "Enabled" if chain_info.get("withdraw_status") == "enable" else "Disabled"
+                                "max_volume": max_volume,
+                                "deposit": "Enabled" if chain_info.get("is_deposit_enabled") else "Disabled",
+                                "withdraw": "Enabled" if chain_info.get("is_withdraw_enabled") else "Disabled",
+                                "withdraw_fee": fee_str,
+                                "chain": chain_info.get("chain_name", "N/A")
                             }
                 
                 logger.error(f"Gate.io: Failed to get currency info for {symbol}")
-                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                return {
+                    "max_volume": "N/A",
+                    "deposit": "N/A",
+                    "withdraw": "N/A",
+                    "withdraw_fee": "N/A",
+                    "chain": "N/A"
+                }
                 
         except Exception as e:
             logger.error(f"Exception in GateIO.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         """Get all available futures trading pairs"""

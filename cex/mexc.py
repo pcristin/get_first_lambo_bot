@@ -90,54 +90,112 @@ class MEXC(BaseCEX):
             return None
 
     async def get_deposit_withdraw_info(self, symbol: str) -> Dict:
-        await self._acquire_private_rate_limit()
-        endpoint = "/api/v3/capital/config/getall"
-        timestamp = int(time.time() * 1000)
+        """
+        Gets deposit and withdrawal information for a token using MEXC's API.
+        Returns a dictionary containing max withdrawal amount, deposit/withdrawal status,
+        withdrawal fees and chain information.
         
-        params = {
-            "timestamp": timestamp,
-            "recvWindow": 5000
-        }
-        
-        signature = self._generate_signature(params)
-        headers = {
-            "X-MEXC-APIKEY": self.api_key,
-            "Content-Type": "application/json"
-        }
-        
-        params["signature"] = signature
-        session = await self._get_session()
-        
+        API Docs: https://mexcdevelop.github.io/apidocs/spot_v3_en/#exchange-information
+        """
         try:
+            await self._acquire_private_rate_limit()
+            
+            session = await self._get_session()
+            
+            # First get the coin info from exchange information endpoint
             async with session.get(
-                f"{self.PRIVATE_API_URL}{endpoint}",
-                params=params,
-                headers=headers
+                "https://api.mexc.com/api/v3/exchangeInfo",
+                params={"symbol": f"{symbol}USDT"}
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    coin_info = next((coin for coin in data if coin.get("coin") == symbol), None)
-                    
-                    if coin_info:
-                        network_info = max(
-                            coin_info.get("networkList", []),
-                            key=lambda x: float(x.get("withdrawMax", 0)) if x.get("withdrawMax", "0").replace(".", "").isdigit() else 0,
-                            default={}
+                    if "symbols" in data:
+                        symbol_info = next(
+                            (s for s in data["symbols"] if s.get("baseAsset") == symbol),
+                            None
                         )
                         
-                        info = {
-                            "max_volume": network_info.get("withdrawMax", "N/A"),
-                            "deposit": "Enabled" if network_info.get("depositEnable", False) else "Disabled",
-                            "withdraw": "Enabled" if network_info.get("withdrawEnable", False) else "Disabled"
-                        }
-                        logger.info(f"MEXC deposit/withdraw info for {symbol}: {info}")
-                        return info
-                    
-                    logger.error(f"Could not find {symbol} in MEXC capital config")
-                return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+                        if symbol_info:
+                            # Get withdrawal info from capital config endpoint
+                            timestamp = str(int(time.time() * 1000))
+                            params = {
+                                "timestamp": timestamp,
+                                "recvWindow": 5000
+                            }
+                            
+                            signature = self._generate_signature(params)
+                            headers = {
+                                "X-MEXC-APIKEY": self.api_key,
+                                "Content-Type": "application/json"
+                            }
+                            
+                            params["signature"] = signature
+                            
+                            async with session.get(
+                                f"{self.PRIVATE_API_URL}/api/v3/capital/config/getall",
+                                params=params,
+                                headers=headers
+                            ) as withdraw_response:
+                                if withdraw_response.status == 200:
+                                    withdraw_data = await withdraw_response.json()
+                                    coin_info = next(
+                                        (coin for coin in withdraw_data if coin.get("coin") == symbol),
+                                        None
+                                    )
+                                    
+                                    if coin_info:
+                                        networks = coin_info.get("networkList", [])
+                                        
+                                        # Try to find BSC chain first, fall back to first available chain
+                                        network_info = next(
+                                            (net for net in networks if "BSC" in net.get("network", "").upper()),
+                                            next((net for net in networks if net.get("depositEnable")), networks[0] if networks else None)
+                                        )
+                                        
+                                        if network_info:
+                                            # Get withdrawal limits
+                                            min_withdraw = network_info.get("withdrawMin", "N/A")
+                                            max_withdraw = network_info.get("withdrawMax", "N/A")
+                                            
+                                            # Format max volume as range if both min and max are available
+                                            max_volume = f"{min_withdraw}-{max_withdraw}" if min_withdraw != "N/A" and max_withdraw != "N/A" else max_withdraw
+                                            
+                                            # Get withdrawal fee
+                                            withdraw_fee = network_info.get("withdrawFee", "N/A")
+                                            withdraw_fee_percent = network_info.get("withdrawIntegerMultiple", "0")
+                                            
+                                            # Format withdrawal fee string
+                                            if withdraw_fee != "N/A" and float(withdraw_fee_percent) > 0:
+                                                fee_str = f"{withdraw_fee} + {float(withdraw_fee_percent) * 100}%"
+                                            else:
+                                                fee_str = withdraw_fee
+                                            
+                                            return {
+                                                "max_volume": max_volume,
+                                                "deposit": "Enabled" if network_info.get("depositEnable") else "Disabled",
+                                                "withdraw": "Enabled" if network_info.get("withdrawEnable") else "Disabled",
+                                                "withdraw_fee": fee_str,
+                                                "chain": network_info.get("network", "N/A")
+                                            }
+                
+                logger.error(f"MEXC: Failed to get currency info for {symbol}")
+                return {
+                    "max_volume": "N/A",
+                    "deposit": "N/A",
+                    "withdraw": "N/A",
+                    "withdraw_fee": "N/A",
+                    "chain": "N/A"
+                }
+                
         except Exception as e:
             logger.error(f"Exception in MEXC.get_deposit_withdraw_info: {e}")
-            return {"max_volume": "N/A", "deposit": "N/A", "withdraw": "N/A"}
+            return {
+                "max_volume": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "withdraw_fee": "N/A",
+                "chain": "N/A"
+            }
 
     async def get_futures_symbols(self) -> List[str]:
         await self._acquire_market_rate_limit()
